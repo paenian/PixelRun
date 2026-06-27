@@ -534,6 +534,20 @@ local function onPlayerJoin(player: Player)
     -- Brief wait for physics to settle
     task.wait(0.5)
 
+    -- Set player collision height to 3 blocks (6 studs) so they cannot walk
+    -- through gaps smaller than 3 blocks. The default R15 character is ~5 studs;
+    -- we increase HipHeight to make the collision capsule 6 studs tall.
+    local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
+    if humanoid then
+        humanoid.HipHeight = 2.5 -- Raises the capsule so total height ≈ 6 studs (3 blocks)
+    end
+
+    -- Also set this on future respawns
+    player.CharacterAdded:Connect(function(newCharacter: Model)
+        local newHumanoid = newCharacter:WaitForChild("Humanoid") :: Humanoid
+        newHumanoid.HipHeight = 2.5
+    end)
+
     -- Load player data from DataStore (or use defaults on failure)
     local profileData = DataStoreManager.loadPlayerData(player.UserId)
     if not profileData then

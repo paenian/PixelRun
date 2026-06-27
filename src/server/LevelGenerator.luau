@@ -35,6 +35,52 @@ local REQUIRED_PACK_FIELDS = {
 }
 
 --============================================================================
+-- Internal: Piece Shape Definitions (used by both generateLevel and buildLevel)
+--============================================================================
+
+--- Tetris piece block offsets: {x, y} where x = across track, y = vertical height.
+--- Pieces are 1 block thick in Z, forming walls facing the player.
+local PIECE_SHAPES_GEN: {[string]: {{number}}} = {
+    I = {{0,0}, {1,0}, {2,0}, {3,0}},       -- Horizontal bar
+    O = {{0,0}, {1,0}, {0,1}, {1,1}},       -- 2x2 square
+    T = {{0,0}, {1,0}, {2,0}, {1,1}},       -- T-shape
+    S = {{0,0}, {1,0}, {1,1}, {2,1}},       -- S-shape
+    Z = {{1,0}, {2,0}, {0,1}, {1,1}},       -- Z-shape
+    L = {{0,0}, {1,0}, {2,0}, {2,1}},       -- L-shape
+    J = {{0,0}, {1,0}, {2,0}, {0,1}},       -- J-shape
+    Kill = {{0,0}, {1,0}, {0,1}, {1,1}},    -- 2x2 kill block
+}
+
+--- Rotate a set of block offsets by degrees (0, 90, 180, 270) and normalize.
+local function rotateOffsetsGen(offsets: {{number}}, degrees: number): {{number}}
+    if degrees == 0 then
+        return offsets
+    end
+    local rotated: {{number}} = {}
+    for _, offset in offsets do
+        local x, y = offset[1], offset[2]
+        if degrees == 90 then
+            table.insert(rotated, {y, -x})
+        elseif degrees == 180 then
+            table.insert(rotated, {-x, -y})
+        elseif degrees == 270 then
+            table.insert(rotated, {-y, x})
+        end
+    end
+    -- Normalize: shift so minimum x and y are 0
+    local minX, minY = math.huge, math.huge
+    for _, r in rotated do
+        if r[1] < minX then minX = r[1] end
+        if r[2] < minY then minY = r[2] end
+    end
+    for _, r in rotated do
+        r[1] = r[1] - minX
+        r[2] = r[2] - minY
+    end
+    return rotated
+end
+
+--============================================================================
 -- Internal: Seeded RNG
 --============================================================================
 
@@ -135,18 +181,18 @@ function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNu
     } } = {}
 
     -- Walk through the level length, deciding at each block if an obstacle wall spawns.
-    -- When a wall spawns, place multiple pieces stacked/side-by-side at the same Z
-    -- to create fuller Tetris-board-like walls with navigable gaps.
+    -- When a wall spawns, place multiple pieces at the same Z using an occupancy grid
+    -- to prevent overlaps — just like real Tetris, no two blocks share the same cell.
     for z = 1, LEVEL_LENGTH do
         -- Use density as probability of spawning a wall at this position
         local roll = rng:NextNumber() -- Returns 0.0 to 1.0
         if roll < density then
-            -- Determine how many pieces to stack at this Z position (1-4)
-            -- More pieces = fuller wall, but always leave a gap for the player
+            -- Determine how many pieces to attempt placing at this Z position (2-4)
             local pieceCount = rng:NextInteger(2, 4)
 
-            -- Track which columns are occupied to ensure a gap exists
-            local occupiedColumns: { [number]: boolean } = {}
+            -- Occupancy grid: tracks which (x, y) cells are filled at this Z
+            -- Key: "x,y" string, Value: true if occupied
+            local occupied: { [string]: boolean } = {}
             local maxH = difficultyConfig.maxHeight
 
             for _ = 1, pieceCount do
@@ -161,48 +207,56 @@ function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNu
                 -- Select a random X position (clamped so piece fits on track)
                 local xPos = rng:NextInteger(1, math.max(1, LEVEL_WIDTH - 3))
 
-                -- Determine base Y row for this piece in the stack
-                -- Ground pieces (baseRow = 0) are jump-over obstacles
-                -- Elevated pieces (baseRow >= 3) create run-through gaps
+                -- Determine base Y row for this piece
                 local baseRow = 0
                 local obstacleMaxH = math.min(obstacleType.maxHeight, maxH)
 
-                -- For stacking: alternate between ground level and stacked heights
-                -- Some pieces sit on top of others (baseRow = 2 or 3) to build taller walls
                 local stackRoll = rng:NextNumber()
                 if obstacleMaxH >= 4 and stackRoll < 0.2 then
                     -- Elevated piece with run-through gap (player can run under)
                     baseRow = rng:NextInteger(3, obstacleMaxH)
                 elseif stackRoll < 0.5 then
-                    -- Stacked piece (sits on top of a ground-level piece)
-                    -- This creates taller walls the player must jump over or go around
+                    -- Stacked piece (sits above ground level)
                     baseRow = rng:NextInteger(1, math.min(2, obstacleMaxH))
                 end
-                -- else: baseRow stays 0 (ground level)
 
-                -- Track the column for gap checking
-                occupiedColumns[xPos] = true
-
-                table.insert(obstacles, {
-                    position = Vector3.new(xPos, baseRow, z),
-                    shape = obstacleType.shape,
-                    orientation = orientation,
-                    color = obstacleType.color,
-                    isTouchKill = obstacleType.isTouchKill,
-                })
-            end
-
-            -- Guarantee at least one navigable gap: if all columns are blocked,
-            -- remove the last piece (the player must always have a path)
-            local gapExists = false
-            for col = 1, LEVEL_WIDTH do
-                if not occupiedColumns[col] then
-                    gapExists = true
-                    break
+                -- Compute the cells this piece would occupy using the shape offsets
+                -- We need the rotated offsets to check occupancy correctly
+                local baseOffsets = PIECE_SHAPES_GEN[obstacleType.shape]
+                if not baseOffsets then
+                    baseOffsets = {{0, 0}}
                 end
-            end
-            if not gapExists and #obstacles > 0 then
-                table.remove(obstacles, #obstacles)
+                local offsets = rotateOffsetsGen(baseOffsets, orientation)
+
+                -- Check if all cells for this piece are free
+                local canPlace = true
+                local cellKeys: {string} = {}
+                for _, offset in offsets do
+                    local cellX = xPos + offset[1]
+                    local cellY = baseRow + offset[2]
+                    local key = tostring(cellX) .. "," .. tostring(cellY)
+                    if occupied[key] or cellX > LEVEL_WIDTH or cellX < 1 then
+                        canPlace = false
+                        break
+                    end
+                    table.insert(cellKeys, key)
+                end
+
+                -- Only place the piece if no cells overlap
+                if canPlace then
+                    -- Mark cells as occupied
+                    for _, key in cellKeys do
+                        occupied[key] = true
+                    end
+
+                    table.insert(obstacles, {
+                        position = Vector3.new(xPos, baseRow, z),
+                        shape = obstacleType.shape,
+                        orientation = orientation,
+                        color = obstacleType.color,
+                        isTouchKill = obstacleType.isTouchKill,
+                    })
+                end
             end
         end
     end
