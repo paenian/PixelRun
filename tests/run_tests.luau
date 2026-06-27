@@ -76,18 +76,15 @@ local function executeTest(filePath: string): TestResult
     }
     
     -- Run the test file as a subprocess using Lune
-    local spawnResult = process.spawn("lune", {"run", filePath}, {
-        cwd = process.cwd,
-        stdio = "default",
-    })
+    local spawnResult = process.exec("lune", {"run", filePath})
     
-    result.output = spawnResult.stdout
+    result.output = spawnResult.stdout or ""
     
     if not spawnResult.ok then
         result.passed = false
-        result.error = spawnResult.stderr
+        result.error = spawnResult.stderr or ""
         if result.error == "" then
-            result.error = spawnResult.stdout
+            result.error = spawnResult.stdout or ""
         end
     end
     

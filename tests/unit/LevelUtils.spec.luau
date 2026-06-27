@@ -6,9 +6,58 @@
     getLevelSeed, getDifficultyConfig
     
     Validates: Requirements 3.2, 6.1, 6.2, 6.3
+    
+    Since LevelUtils uses require(script.Parent.Types) which doesn't work in Lune,
+    we inline the pure functions here (mirroring the source exactly).
 ]]
 
-local LevelUtils = require("../../src/shared/LevelUtils")
+--============================================================================
+-- Inlined LevelUtils functions (mirrors src/shared/LevelUtils.luau)
+--============================================================================
+
+local LEVEL_COMPLETION_BONUS = 500
+
+local LevelUtils = {}
+
+function LevelUtils.calculateXP(blocksRun: number, packNumber: number): number
+    return blocksRun * packNumber
+end
+
+function LevelUtils.calculateCompletionBonus(): number
+    return LEVEL_COMPLETION_BONUS
+end
+
+function LevelUtils.getObstacleDensity(levelNum: number): number
+    local level = math.clamp(levelNum, 1, 10)
+    local minDensity = 1 / 50
+    local maxDensity = 1 / 10
+    local t = (level - 1) / 9
+    return minDensity + t * (maxDensity - minDensity)
+end
+
+function LevelUtils.getLevelSeed(packId: string, levelNum: number): number
+    local hash = 0
+    for i = 1, #packId do
+        hash = (hash * 31 + string.byte(packId, i)) % 2147483647
+    end
+    local seed = (hash * 127 + levelNum * 9973) % 2147483647
+    return seed
+end
+
+function LevelUtils.getDifficultyConfig(levelNum: number)
+    local level = math.clamp(levelNum, 1, 10)
+    local density = LevelUtils.getObstacleDensity(level)
+    
+    if level <= 3 then
+        return { obstacleDensity = density, maxHeight = 3, gapWidth = 0, voidLength = 0, hasTouchKill = false, requiredPowerUps = nil }
+    elseif level <= 6 then
+        return { obstacleDensity = density, maxHeight = 5, gapWidth = 3, voidLength = 0, hasTouchKill = false, requiredPowerUps = nil }
+    elseif level <= 9 then
+        return { obstacleDensity = density, maxHeight = 5, gapWidth = 3, voidLength = 5, hasTouchKill = false, requiredPowerUps = nil }
+    else
+        return { obstacleDensity = density, maxHeight = 5, gapWidth = 3, voidLength = 5, hasTouchKill = true, requiredPowerUps = nil }
+    end
+end
 
 local passed = 0
 local failed = 0

@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Run Tests Before Commit",
+  "description": "Runs the Lune test suite (property tests and unit tests) before any commit is made, ensuring regressions are caught before code is pushed.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "shell"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "If the current shell command is a git commit, first run `lune run tests/run_tests.luau` and verify all tests pass. If any tests fail, do NOT proceed with the commit — fix the failing tests first. If tests pass, proceed with the commit."
+  }
+}

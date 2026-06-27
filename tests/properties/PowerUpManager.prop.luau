@@ -13,7 +13,7 @@
     power-up definitions and reimplement the pure validation logic for Lune testing.
 ]]
 
-local TestHarness = require("../tests/TestHarness")
+local TestHarness = require("../TestHarness")
 
 --============================================================================
 -- Inlined Power-Up Definitions (from Types.POWER_UP_DEFINITIONS)
