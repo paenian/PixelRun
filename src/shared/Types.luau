@@ -115,7 +115,7 @@ export type LeaderboardEntry = {
 --- Higher Jump: 3 tiers (1.25x, 1.5x, 2.0x) costing 2000, 5000, 12000 XP
 --- Double Jump: 1 tier (enabled) costing 8000 XP
 --- Faster Speed: 3 tiers (1.25x, 1.5x, 2.0x) costing 2000, 5000, 12000 XP
-Types.POWER_UP_DEFINITIONS: {PowerUpDefinition} = {
+Types.POWER_UP_DEFINITIONS = {
     {
         id = "higherJump",
         name = "Higher Jump",
@@ -155,7 +155,7 @@ Types.LEVEL_COMPLETION_BONUS = 500  -- Bonus XP for completing a level
 Types.CURRENT_PROFILE_VERSION = 1
 
 --- Default player profile for new players or failed data loads
-Types.DEFAULT_PLAYER_PROFILE: PlayerProfile = {
+Types.DEFAULT_PLAYER_PROFILE = {
     version = Types.CURRENT_PROFILE_VERSION,
     xp = 0,
     powerUps = {
