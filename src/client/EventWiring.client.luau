@@ -22,6 +22,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local EffectsManager = require(script.Parent.EffectsManager)
 local SoundManager = require(script.Parent.SoundManager)
+local HUDManager = require(script.Parent.HUDManager)
+local LobbyUI = require(script.Parent.LobbyUI)
 
 --============================================================================
 -- Helpers
