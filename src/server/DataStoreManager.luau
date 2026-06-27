@@ -30,12 +30,29 @@ local AUTO_SAVE_INTERVAL = Types.AUTO_SAVE_INTERVAL  -- 60 seconds
 -- Module State
 --============================================================================
 
-local dataStore = DataStoreService:GetDataStore(DATA_STORE_NAME)
+local dataStore: DataStore? = nil
 local cache: {[number]: Types.PlayerProfile} = {}
 
 --============================================================================
 -- Private Helpers
 --============================================================================
+
+--- Gets or initializes the DataStore (lazy, avoids error in unpublished places).
+local function getDataStore(): DataStore?
+    if dataStore then
+        return dataStore
+    end
+    local success, store = pcall(function()
+        return DataStoreService:GetDataStore(DATA_STORE_NAME)
+    end)
+    if success then
+        dataStore = store
+        return store
+    else
+        warn("[DataStoreManager] Could not access DataStore: " .. tostring(store))
+        return nil
+    end
+end
 
 --- Builds the DataStore key for a given userId.
 local function getKey(userId: number): string
@@ -87,8 +104,16 @@ function DataStoreManager.loadPlayerData(userId: number): (Types.PlayerProfile?,
     local lastError: string? = nil
 
     for attempt = 1, LOAD_RETRIES do
+        local store = getDataStore()
+        if not store then
+            -- DataStore unavailable (unpublished place) — return default profile
+            local defaultProfile = deepCopy(Types.DEFAULT_PLAYER_PROFILE)
+            cache[userId] = defaultProfile
+            return defaultProfile, nil
+        end
+
         local success, result = pcall(function()
-            return dataStore:GetAsync(key)
+            return store:GetAsync(key)
         end)
 
         if success then
@@ -135,8 +160,14 @@ function DataStoreManager.savePlayerData(userId: number, data: Types.PlayerProfi
     cache[userId] = data
 
     for attempt = 1, SAVE_RETRIES do
+        local store = getDataStore()
+        if not store then
+            -- DataStore unavailable — data stays in memory cache only
+            return false, "DataStore not available (place not published)"
+        end
+
         local success, result = pcall(function()
-            dataStore:SetAsync(key, data)
+            store:SetAsync(key, data)
         end)
 
         if success then
