@@ -4,11 +4,101 @@ Get Pixel Run Obby running in Roblox Studio for testing in under 5 minutes.
 
 ## Prerequisites
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| [Roblox Studio](https://create.roblox.com/) | Game runtime & testing | Roblox website |
-| [Rojo](https://rojo.space/) | File sync (external → Studio) | `cargo install rojo` or [releases](https://github.com/rojo-rbx/rojo/releases) |
-| [Lune](https://lune-org.github.io/docs) | Test runner (optional, for CI) | `cargo install lune` or [releases](https://github.com/lune-org/lune/releases) |
+| Tool | Purpose |
+|------|---------|
+| [Roblox Studio](https://create.roblox.com/) | Game runtime & testing |
+| [Rojo](https://rojo.space/) | File sync (external → Studio) |
+| [Lune](https://lune-org.github.io/docs) | Test runner (optional, for CI) |
+
+### Installing on Windows
+
+**Roblox Studio:**
+Download and install from [create.roblox.com](https://create.roblox.com/).
+
+**Rojo (pick one method):**
+
+```powershell
+# Method 1: Aftman (recommended Roblox toolchain manager)
+# Install Aftman first: https://github.com/LPGhatguy/aftman/releases
+aftman install rojo-rbx/rojo
+
+# Method 2: Cargo (requires Rust toolchain — https://rustup.rs)
+cargo install rojo
+
+# Method 3: Direct download
+# Go to https://github.com/rojo-rbx/rojo/releases
+# Download the Windows .zip, extract rojo.exe, add to PATH
+```
+
+**Lune (pick one method):**
+
+```powershell
+# Method 1: Aftman
+aftman install lune-org/lune
+
+# Method 2: Cargo
+cargo install lune
+
+# Method 3: Direct download
+# Go to https://github.com/lune-org/lune/releases
+# Download the Windows .zip, extract lune.exe, add to PATH
+```
+
+**Verify installation:**
+
+```powershell
+rojo --version    # Should print something like "rojo 7.x.x"
+lune --version    # Should print something like "lune 0.8.x"
+```
+
+> **Tip:** If you don't want to install Rust/Cargo, Aftman is the easiest option. It's a single binary that manages Roblox dev tool versions for you. Download it from [GitHub releases](https://github.com/LPGhatguy/aftman/releases), put it on your PATH, then use `aftman install` for Rojo and Lune.
+
+### Installing on macOS
+
+**Roblox Studio:**
+Download the `.dmg` from [create.roblox.com](https://create.roblox.com/) and drag to Applications.
+
+**Rojo and Lune via Homebrew (easiest):**
+
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install both tools
+brew install rojo
+brew install lune
+```
+
+**Alternative: Aftman (same as Windows):**
+
+```bash
+# Install Aftman
+curl -L https://github.com/LPGhatguy/aftman/releases/latest/download/aftman-macos-aarch64.zip -o aftman.zip
+unzip aftman.zip && chmod +x aftman && mv aftman /usr/local/bin/
+
+# Then install tools
+aftman install rojo-rbx/rojo
+aftman install lune-org/lune
+```
+
+**Alternative: Cargo:**
+
+```bash
+# Install Rust first (if needed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Then install via Cargo
+cargo install rojo lune
+```
+
+**Verify installation:**
+
+```bash
+rojo --version
+lune --version
+```
+
+> **Apple Silicon note:** Homebrew, Aftman, and Cargo all provide native arm64 binaries for M1/M2/M3 Macs. If you download a release binary manually, pick the `aarch64-apple-darwin` variant.
 
 ## Setup
 
@@ -85,35 +175,16 @@ To test DataStore persistence and leaderboards locally:
 
 Roblox Studio runs natively on macOS (Apple Silicon and Intel). A few differences from the Windows workflow:
 
-### Installing tools on macOS
-
-```bash
-# Homebrew (if you don't have it)
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Rojo
-brew install rojo
-# OR download from GitHub releases (universal binary)
-
-# Lune
-brew install lune
-# OR: cargo install lune (requires Rust toolchain)
-```
-
 ### Roblox Studio on Mac
 
-- Download from [create.roblox.com](https://create.roblox.com/) — the Mac version is a standard `.dmg`
 - Studio lives in `/Applications/RobloxStudio.app`
 - The Rojo plugin installs the same way (Toolbox → search "Rojo" → install)
 - Playtest shortcut is **⌘+F5** (or click Play in the toolbar)
+- Output window: **View → Output**
 
-### File paths
+### File paths & terminal
 
 macOS uses forward slashes. The project works as-is — Rojo handles paths cross-platform. No changes needed to `default.project.json`.
-
-### Terminal commands
-
-All commands in this guide work identically in Terminal.app or iTerm2:
 
 ```bash
 cd ~/Projects/PixelRun   # or wherever you cloned it
@@ -123,10 +194,9 @@ lune run tests/run_tests.luau  # run tests
 
 ### Known macOS differences
 
-- Studio's Output window uses **View → Output** (same as Windows)
-- File watching (Rojo) works with macOS's FSEvents — changes sync instantly
+- File watching (Rojo) uses macOS FSEvents — changes sync instantly
 - If Rojo fails to connect, check that port 34872 isn't blocked by the macOS firewall (System Settings → Network → Firewall → Options → allow `rojo`)
-- On Apple Silicon Macs, both Rojo and Lune run natively (arm64 binaries available)
+- If a binary is quarantined after download, clear it: `xattr -d com.apple.quarantine /path/to/binary`
 
 ## Controls
 
