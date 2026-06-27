@@ -15,33 +15,12 @@ Get Pixel Run Obby running in Roblox Studio for testing in under 5 minutes.
 **Roblox Studio:**
 Download and install from [create.roblox.com](https://create.roblox.com/).
 
-**Rojo (pick one method):**
+**Rojo & Lune:**
 
 ```powershell
-# Method 1: Aftman (recommended Roblox toolchain manager)
 # Install Aftman first: https://github.com/LPGhatguy/aftman/releases
-aftman install rojo-rbx/rojo
-
-# Method 2: Cargo (requires Rust toolchain — https://rustup.rs)
-cargo install rojo
-
-# Method 3: Direct download
-# Go to https://github.com/rojo-rbx/rojo/releases
-# Download the Windows .zip, extract rojo.exe, add to PATH
-```
-
-**Lune (pick one method):**
-
-```powershell
-# Method 1: Aftman
-aftman install lune-org/lune
-
-# Method 2: Cargo
-cargo install lune
-
-# Method 3: Direct download
-# Go to https://github.com/lune-org/lune/releases
-# Download the Windows .zip, extract lune.exe, add to PATH
+# aftman installs from the aftman.toml file - add new tools there as needed
+aftman install
 ```
 
 **Verify installation:**
@@ -50,8 +29,6 @@ cargo install lune
 rojo --version    # Should print something like "rojo 7.x.x"
 lune --version    # Should print something like "lune 0.8.x"
 ```
-
-> **Tip:** If you don't want to install Rust/Cargo, Aftman is the easiest option. It's a single binary that manages Roblox dev tool versions for you. Download it from [GitHub releases](https://github.com/LPGhatguy/aftman/releases), put it on your PATH, then use `aftman install` for Rojo and Lune.
 
 ### Installing on macOS
 
