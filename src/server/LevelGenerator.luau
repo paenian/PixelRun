@@ -20,7 +20,7 @@ local LevelGenerator = {}
 --============================================================================
 
 local LEVEL_WIDTH = Types.LEVEL_WIDTH       -- 10 blocks wide
-local LEVEL_LENGTH = Types.LEVEL_LENGTH     -- 1000 blocks long
+local LEVEL_LENGTH = Types.LEVEL_LENGTH     -- 500 blocks long
 local BLOCK_SCALE = 2                       -- 1 game block = 2 studs (Roblox characters are ~5 studs tall)
 
 --- Required fields for LevelPackConfig schema validation.
@@ -134,34 +134,76 @@ function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNu
         isTouchKill: boolean,
     } } = {}
 
-    -- Walk through the level length, deciding at each block if an obstacle spawns
+    -- Walk through the level length, deciding at each block if an obstacle wall spawns.
+    -- When a wall spawns, place multiple pieces stacked/side-by-side at the same Z
+    -- to create fuller Tetris-board-like walls with navigable gaps.
     for z = 1, LEVEL_LENGTH do
-        -- Use density as probability of spawning an obstacle at this position
+        -- Use density as probability of spawning a wall at this position
         local roll = rng:NextNumber() -- Returns 0.0 to 1.0
         if roll < density then
-            -- Select a random obstacle type from available ones
-            local obstacleIndex = rng:NextInteger(1, #availableObstacles)
-            local obstacleType = availableObstacles[obstacleIndex]
+            -- Determine how many pieces to stack at this Z position (1-4)
+            -- More pieces = fuller wall, but always leave a gap for the player
+            local pieceCount = rng:NextInteger(2, 4)
 
-            -- Select a random orientation from the obstacle's available orientations
-            local orientationIndex = rng:NextInteger(1, #obstacleType.orientations)
-            local orientation = obstacleType.orientations[orientationIndex]
+            -- Track which columns are occupied to ensure a gap exists
+            local occupiedColumns: { [number]: boolean } = {}
+            local maxH = difficultyConfig.maxHeight
 
-            -- Select a random X position across the level width (1 to LEVEL_WIDTH)
-            local xPos = rng:NextInteger(1, LEVEL_WIDTH)
+            for _ = 1, pieceCount do
+                -- Select a random obstacle type from available ones
+                local obstacleIndex = rng:NextInteger(1, #availableObstacles)
+                local obstacleType = availableObstacles[obstacleIndex]
 
-            -- Determine height (random up to the obstacle's maxHeight, capped by level config)
-            local maxH = math.min(obstacleType.maxHeight, difficultyConfig.maxHeight)
-            local height = rng:NextInteger(1, maxH)
+                -- Select a random orientation
+                local orientationIndex = rng:NextInteger(1, #obstacleType.orientations)
+                local orientation = obstacleType.orientations[orientationIndex]
 
-            -- Create the obstacle entry with position as Vector3
-            table.insert(obstacles, {
-                position = Vector3.new(xPos, height, z),
-                shape = obstacleType.shape,
-                orientation = orientation,
-                color = obstacleType.color,
-                isTouchKill = obstacleType.isTouchKill,
-            })
+                -- Select a random X position (clamped so piece fits on track)
+                local xPos = rng:NextInteger(1, math.max(1, LEVEL_WIDTH - 3))
+
+                -- Determine base Y row for this piece in the stack
+                -- Ground pieces (baseRow = 0) are jump-over obstacles
+                -- Elevated pieces (baseRow >= 3) create run-through gaps
+                local baseRow = 0
+                local obstacleMaxH = math.min(obstacleType.maxHeight, maxH)
+
+                -- For stacking: alternate between ground level and stacked heights
+                -- Some pieces sit on top of others (baseRow = 2 or 3) to build taller walls
+                local stackRoll = rng:NextNumber()
+                if obstacleMaxH >= 4 and stackRoll < 0.2 then
+                    -- Elevated piece with run-through gap (player can run under)
+                    baseRow = rng:NextInteger(3, obstacleMaxH)
+                elseif stackRoll < 0.5 then
+                    -- Stacked piece (sits on top of a ground-level piece)
+                    -- This creates taller walls the player must jump over or go around
+                    baseRow = rng:NextInteger(1, math.min(2, obstacleMaxH))
+                end
+                -- else: baseRow stays 0 (ground level)
+
+                -- Track the column for gap checking
+                occupiedColumns[xPos] = true
+
+                table.insert(obstacles, {
+                    position = Vector3.new(xPos, baseRow, z),
+                    shape = obstacleType.shape,
+                    orientation = orientation,
+                    color = obstacleType.color,
+                    isTouchKill = obstacleType.isTouchKill,
+                })
+            end
+
+            -- Guarantee at least one navigable gap: if all columns are blocked,
+            -- remove the last piece (the player must always have a path)
+            local gapExists = false
+            for col = 1, LEVEL_WIDTH do
+                if not occupiedColumns[col] then
+                    gapExists = true
+                    break
+                end
+            end
+            if not gapExists and #obstacles > 0 then
+                table.remove(obstacles, #obstacles)
+            end
         end
     end
 
@@ -210,16 +252,21 @@ function LevelGenerator.buildLevel(layout: Types.LevelLayout): Model
     ground.Parent = model
 
     -- Tetris piece block offsets (relative to origin, in block units)
-    -- Each piece is defined as a list of (x, y) offsets for orientation 0
+    -- Each piece is defined as a list of {x, y} offsets where:
+    --   x = horizontal position across track width (left-right)
+    --   y = vertical height (up from ground)
+    -- Pieces are always 1 block thick in Z (depth along the track), forming
+    -- walls that face the player like a Tetris board. The player must jump
+    -- over, duck through gaps, or strafe around the shapes.
     local PIECE_SHAPES: {[string]: {{number}}} = {
-        I = {{0,0}, {1,0}, {2,0}, {3,0}},
-        O = {{0,0}, {1,0}, {0,1}, {1,1}},
-        T = {{0,0}, {1,0}, {2,0}, {1,1}},
-        S = {{0,0}, {1,0}, {1,1}, {2,1}},
-        Z = {{1,0}, {2,0}, {0,1}, {1,1}},
-        L = {{0,0}, {1,0}, {2,0}, {2,1}},
-        J = {{0,0}, {1,0}, {2,0}, {0,1}},
-        Kill = {{0,0}, {1,0}, {0,1}, {1,1}}, -- 2x2 kill block
+        I = {{0,0}, {1,0}, {2,0}, {3,0}},       -- Horizontal bar
+        O = {{0,0}, {1,0}, {0,1}, {1,1}},       -- 2x2 square
+        T = {{0,0}, {1,0}, {2,0}, {1,1}},       -- T-shape
+        S = {{0,0}, {1,0}, {1,1}, {2,1}},       -- S-shape
+        Z = {{1,0}, {2,0}, {0,1}, {1,1}},       -- Z-shape
+        L = {{0,0}, {1,0}, {2,0}, {2,1}},       -- L-shape
+        J = {{0,0}, {1,0}, {2,0}, {0,1}},       -- J-shape
+        Kill = {{0,0}, {1,0}, {0,1}, {1,1}},    -- 2x2 kill block
     }
 
     --- Rotate a set of block offsets by the given degrees (0, 90, 180, 270)
@@ -251,7 +298,7 @@ function LevelGenerator.buildLevel(layout: Types.LevelLayout): Model
         return rotated
     end
 
-    -- Create obstacles as multi-block Tetris shapes
+    -- Create obstacles as multi-block Tetris shapes (1 block thick in Z direction)
     for i, obstacle in layout.obstacles do
         local baseOffsets = PIECE_SHAPES[obstacle.shape]
         if not baseOffsets then
@@ -259,41 +306,42 @@ function LevelGenerator.buildLevel(layout: Types.LevelLayout): Model
             baseOffsets = {{0, 0}}
         end
 
-        -- Rotate the piece
+        -- Rotate the piece (rotation is in the XY plane — the wall face the player sees)
         local offsets = rotateOffsets(baseOffsets, obstacle.orientation)
 
         -- Base position in studs (scaled)
+        -- obstacle.position.X = starting column across track width
+        -- obstacle.position.Z = position along the track
+        -- obstacle.position.Y = base row offset (how many blocks above ground the piece starts)
         local baseX = obstacle.position.X * BLOCK_SCALE
         local baseZ = obstacle.position.Z * BLOCK_SCALE
-        local baseY = 0 -- On top of ground (ground top is at y=0)
+        local baseRow = obstacle.position.Y -- Row offset above ground
 
         -- Create a Model for this piece
         local pieceModel = Instance.new("Model")
         pieceModel.Name = obstacle.shape .. "_" .. tostring(i)
 
-        -- Stack the piece vertically (height = obstacle.position.Y blocks tall)
-        local pieceHeight = obstacle.position.Y
-
+        -- Place each block of the piece as a flat wall (1 block deep in Z)
+        -- offset[1] = X position across track, offset[2] = Y position (height within piece)
+        -- Final Y = baseRow + offset[2], placing the piece shape at the correct elevation
         for _, offset in offsets do
-            for h = 0, pieceHeight - 1 do
-                local block = Instance.new("Part")
-                block.Name = "Block"
-                block.Size = Vector3.new(BLOCK_SCALE, BLOCK_SCALE, BLOCK_SCALE)
-                block.Position = Vector3.new(
-                    baseX + offset[1] * BLOCK_SCALE,
-                    baseY + (h + 0.5) * BLOCK_SCALE,
-                    baseZ + offset[2] * BLOCK_SCALE
-                )
-                block.Anchored = true
-                block.Color = obstacle.color
+            local block = Instance.new("Part")
+            block.Name = "Block"
+            block.Size = Vector3.new(BLOCK_SCALE, BLOCK_SCALE, BLOCK_SCALE)
+            block.Position = Vector3.new(
+                baseX + offset[1] * BLOCK_SCALE,
+                (baseRow + offset[2] + 0.5) * BLOCK_SCALE,
+                baseZ
+            )
+            block.Anchored = true
+            block.Color = obstacle.color
 
-                if obstacle.isTouchKill then
-                    block:SetAttribute("IsTouchKill", true)
-                    block.Material = Enum.Material.Neon
-                end
-
-                block.Parent = pieceModel
+            if obstacle.isTouchKill then
+                block:SetAttribute("IsTouchKill", true)
+                block.Material = Enum.Material.Neon
             end
+
+            block.Parent = pieceModel
         end
 
         pieceModel.Parent = model

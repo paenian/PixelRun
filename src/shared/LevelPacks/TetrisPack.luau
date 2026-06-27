@@ -102,11 +102,14 @@ local TetrisPack: Types.LevelPackConfig = {
 
     --========================================================================
     -- Difficulty Configuration: 10 levels of progressive challenge
+    -- Density is much higher than typical obbies because Tetris pieces are
+    -- thin (1 block deep) and form partial walls — many pieces needed to
+    -- create the look of stacked Tetris boards with navigable gaps.
     --========================================================================
     difficulty = {
         -- Levels 1-3: Jump-over only, max 3 blocks tall, no gaps or voids
         [1] = {
-            obstacleDensity = 1 / 50,
+            obstacleDensity = 1 / 8,
             maxHeight = 3,
             gapWidth = 0,
             voidLength = 0,
@@ -114,7 +117,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [2] = {
-            obstacleDensity = 1 / 45,
+            obstacleDensity = 1 / 7,
             maxHeight = 3,
             gapWidth = 0,
             voidLength = 0,
@@ -122,7 +125,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [3] = {
-            obstacleDensity = 1 / 40,
+            obstacleDensity = 1 / 6,
             maxHeight = 3,
             gapWidth = 0,
             voidLength = 0,
@@ -132,7 +135,7 @@ local TetrisPack: Types.LevelPackConfig = {
 
         -- Levels 4-6: Holes/gaps up to 3 wide, obstacles up to 5 tall
         [4] = {
-            obstacleDensity = 1 / 35,
+            obstacleDensity = 1 / 5,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 0,
@@ -140,7 +143,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [5] = {
-            obstacleDensity = 1 / 30,
+            obstacleDensity = 1 / 5,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 0,
@@ -148,7 +151,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [6] = {
-            obstacleDensity = 1 / 25,
+            obstacleDensity = 1 / 4,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 0,
@@ -158,7 +161,7 @@ local TetrisPack: Types.LevelPackConfig = {
 
         -- Levels 7-9: Void sections up to 5 long
         [7] = {
-            obstacleDensity = 1 / 20,
+            obstacleDensity = 1 / 4,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 5,
@@ -166,7 +169,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [8] = {
-            obstacleDensity = 1 / 15,
+            obstacleDensity = 1 / 3,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 5,
@@ -174,7 +177,7 @@ local TetrisPack: Types.LevelPackConfig = {
             requiredPowerUps = nil,
         },
         [9] = {
-            obstacleDensity = 1 / 12,
+            obstacleDensity = 1 / 3,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 5,
@@ -184,7 +187,7 @@ local TetrisPack: Types.LevelPackConfig = {
 
         -- Level 10: Touch-and-die blocks
         [10] = {
-            obstacleDensity = 1 / 10,
+            obstacleDensity = 1 / 3,
             maxHeight = 5,
             gapWidth = 3,
             voidLength = 5,
