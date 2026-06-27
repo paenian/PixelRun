@@ -21,6 +21,7 @@ local LevelGenerator = {}
 
 local LEVEL_WIDTH = Types.LEVEL_WIDTH       -- 10 blocks wide
 local LEVEL_LENGTH = Types.LEVEL_LENGTH     -- 1000 blocks long
+local BLOCK_SCALE = 2                       -- 1 game block = 2 studs (Roblox characters are ~5 studs tall)
 
 --- Required fields for LevelPackConfig schema validation.
 local REQUIRED_PACK_FIELDS = {
@@ -196,39 +197,106 @@ function LevelGenerator.buildLevel(layout: Types.LevelLayout): Model
     local model = Instance.new("Model")
     model.Name = "GeneratedLevel"
 
-    -- Create the ground platform (10 blocks wide, 1000 blocks long)
+    local scaledWidth = LEVEL_WIDTH * BLOCK_SCALE
+    local scaledLength = LEVEL_LENGTH * BLOCK_SCALE
+
+    -- Create the ground platform (scaled)
     local ground = Instance.new("Part")
     ground.Name = "Ground"
-    ground.Size = Vector3.new(LEVEL_WIDTH, 1, LEVEL_LENGTH)
-    ground.Position = Vector3.new(LEVEL_WIDTH / 2, -0.5, LEVEL_LENGTH / 2)
+    ground.Size = Vector3.new(scaledWidth, 1, scaledLength)
+    ground.Position = Vector3.new(scaledWidth / 2, -0.5, scaledLength / 2)
     ground.Anchored = true
     ground.Color = Color3.fromRGB(100, 100, 100)
     ground.Parent = model
 
-    -- Create a Part for each obstacle in the layout
-    for i, obstacle in layout.obstacles do
-        local part = Instance.new("Part")
-        part.Name = obstacle.shape .. "_" .. tostring(i)
-        -- Each block is 1x1x1 stud, position is the base center
-        part.Size = Vector3.new(1, obstacle.position.Y, 1)
-        -- Position the obstacle on top of the ground
-        part.Position = Vector3.new(
-            obstacle.position.X,
-            obstacle.position.Y / 2, -- Center vertically
-            obstacle.position.Z
-        )
-        part.Anchored = true
-        part.Color = obstacle.color
-        part.Orientation = Vector3.new(0, obstacle.orientation, 0)
+    -- Tetris piece block offsets (relative to origin, in block units)
+    -- Each piece is defined as a list of (x, y) offsets for orientation 0
+    local PIECE_SHAPES: {[string]: {{number}}} = {
+        I = {{0,0}, {1,0}, {2,0}, {3,0}},
+        O = {{0,0}, {1,0}, {0,1}, {1,1}},
+        T = {{0,0}, {1,0}, {2,0}, {1,1}},
+        S = {{0,0}, {1,0}, {1,1}, {2,1}},
+        Z = {{1,0}, {2,0}, {0,1}, {1,1}},
+        L = {{0,0}, {1,0}, {2,0}, {2,1}},
+        J = {{0,0}, {1,0}, {2,0}, {0,1}},
+        Kill = {{0,0}, {1,0}, {0,1}, {1,1}}, -- 2x2 kill block
+    }
 
-        -- Mark touch-kill obstacles with an attribute for collision detection
-        if obstacle.isTouchKill then
-            part:SetAttribute("IsTouchKill", true)
-            -- Give touchkill obstacles a neon material for visual distinction
-            part.Material = Enum.Material.Neon
+    --- Rotate a set of block offsets by the given degrees (0, 90, 180, 270)
+    local function rotateOffsets(offsets: {{number}}, degrees: number): {{number}}
+        if degrees == 0 then
+            return offsets
+        end
+        local rotated: {{number}} = {}
+        for _, offset in offsets do
+            local x, y = offset[1], offset[2]
+            if degrees == 90 then
+                table.insert(rotated, {y, -x})
+            elseif degrees == 180 then
+                table.insert(rotated, {-x, -y})
+            elseif degrees == 270 then
+                table.insert(rotated, {-y, x})
+            end
+        end
+        -- Normalize: shift so minimum x and y are 0
+        local minX, minY = math.huge, math.huge
+        for _, r in rotated do
+            if r[1] < minX then minX = r[1] end
+            if r[2] < minY then minY = r[2] end
+        end
+        for _, r in rotated do
+            r[1] = r[1] - minX
+            r[2] = r[2] - minY
+        end
+        return rotated
+    end
+
+    -- Create obstacles as multi-block Tetris shapes
+    for i, obstacle in layout.obstacles do
+        local baseOffsets = PIECE_SHAPES[obstacle.shape]
+        if not baseOffsets then
+            -- Fallback: single block for unknown shapes
+            baseOffsets = {{0, 0}}
         end
 
-        part.Parent = model
+        -- Rotate the piece
+        local offsets = rotateOffsets(baseOffsets, obstacle.orientation)
+
+        -- Base position in studs (scaled)
+        local baseX = obstacle.position.X * BLOCK_SCALE
+        local baseZ = obstacle.position.Z * BLOCK_SCALE
+        local baseY = 0 -- On top of ground (ground top is at y=0)
+
+        -- Create a Model for this piece
+        local pieceModel = Instance.new("Model")
+        pieceModel.Name = obstacle.shape .. "_" .. tostring(i)
+
+        -- Stack the piece vertically (height = obstacle.position.Y blocks tall)
+        local pieceHeight = obstacle.position.Y
+
+        for _, offset in offsets do
+            for h = 0, pieceHeight - 1 do
+                local block = Instance.new("Part")
+                block.Name = "Block"
+                block.Size = Vector3.new(BLOCK_SCALE, BLOCK_SCALE, BLOCK_SCALE)
+                block.Position = Vector3.new(
+                    baseX + offset[1] * BLOCK_SCALE,
+                    baseY + (h + 0.5) * BLOCK_SCALE,
+                    baseZ + offset[2] * BLOCK_SCALE
+                )
+                block.Anchored = true
+                block.Color = obstacle.color
+
+                if obstacle.isTouchKill then
+                    block:SetAttribute("IsTouchKill", true)
+                    block.Material = Enum.Material.Neon
+                end
+
+                block.Parent = pieceModel
+            end
+        end
+
+        pieceModel.Parent = model
     end
 
     return model

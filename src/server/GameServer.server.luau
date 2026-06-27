@@ -68,9 +68,11 @@ local remoteFunctions: { [string]: RemoteFunction } = {}
 -- Constants
 --============================================================================
 
-local LEVEL_START_POSITION = Vector3.new(5, 3, 0)
+local LEVEL_START_POSITION = Vector3.new(10, 5, 0)  -- Scaled: center of 20-stud-wide track, above ground
 local LOBBY_SPAWN_POSITION = Vector3.new(0, 5, 0)
 local LEVEL_LENGTH = Types.LEVEL_LENGTH  -- 1000 blocks
+local BLOCK_SCALE = 2                    -- Must match LevelGenerator.BLOCK_SCALE
+local LEVEL_LENGTH_STUDS = LEVEL_LENGTH * BLOCK_SCALE  -- 2000 studs
 local XP_UPDATE_INTERVAL = 1  -- Send XP updates every 1 second
 local LEVELS_PER_PACK = 10  -- Number of levels in each pack
 
@@ -590,9 +592,9 @@ local function onHeartbeat(_deltaTime: number)
             continue
         end
 
-        -- XP Accumulation: award XP for each new block traveled
+        -- XP Accumulation: award XP for each new block traveled (convert studs to blocks)
         if playerZ > state.lastBlockZ then
-            local blocksAdvanced = math.floor(playerZ) - math.floor(state.lastBlockZ)
+            local blocksAdvanced = math.floor(playerZ / BLOCK_SCALE) - math.floor(state.lastBlockZ / BLOCK_SCALE)
             if blocksAdvanced > 0 then
                 local xpEarned = LevelUtils.calculateXP(blocksAdvanced, state.packMultiplier)
                 state.currentXP += xpEarned
@@ -601,8 +603,8 @@ local function onHeartbeat(_deltaTime: number)
             end
         end
 
-        -- Level Completion Detection: player reached the 1000-block mark
-        if playerZ >= LEVEL_LENGTH then
+        -- Level Completion Detection: player reached the end (scaled)
+        if playerZ >= LEVEL_LENGTH_STUDS then
             completeLevel(player)
         end
     end

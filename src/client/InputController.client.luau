@@ -26,7 +26,7 @@ local PowerUpManager = require(ReplicatedStorage.PowerUpManager)
 
 local BASE_WALK_SPEED = 16 -- Roblox default humanoid walk speed (studs/s)
 local BASE_JUMP_POWER = 50 -- Roblox default humanoid jump power
-local TRACK_WIDTH = 10 -- Track width in studs (blocks)
+local TRACK_WIDTH = 20 -- Track width in studs (10 blocks × 2 scale)
 local STRAFE_SPEED = 20 -- Lateral movement speed in studs/s
 local FORWARD_DIRECTION = Vector3.new(0, 0, -1) -- Forward is negative Z
 local DOUBLE_JUMP_VELOCITY = 50 -- Upward velocity applied on double jump

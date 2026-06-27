@@ -24,9 +24,10 @@ local MorassManager = {}
 --============================================================================
 
 local MORASS_SPAWN_OFFSET = Types.MORASS_SPAWN_OFFSET -- 50 blocks behind start
-local MORASS_WIDTH = 10   -- Full level width
-local MORASS_HEIGHT = 20  -- Tall enough to be impassable
-local MORASS_DEPTH = 5    -- Thickness of the wall
+local BLOCK_SCALE = 2     -- Must match LevelGenerator scale
+local MORASS_WIDTH = 10 * BLOCK_SCALE   -- Full level width in studs
+local MORASS_HEIGHT = 20 * BLOCK_SCALE  -- Tall enough to be impassable
+local MORASS_DEPTH = 5 * BLOCK_SCALE    -- Thickness of the wall in studs
 
 --============================================================================
 -- Internal State
@@ -80,7 +81,8 @@ function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: n
     -- Clean up any existing morass for this player
     MorassManager.cleanup(player)
 
-    local spawnZ = startZ - MORASS_SPAWN_OFFSET
+    -- Spawn offset is in blocks, convert to studs
+    local spawnZ = startZ - (MORASS_SPAWN_OFFSET * BLOCK_SCALE)
 
     -- Create the morass Part
     local part = Instance.new("Part")
@@ -99,12 +101,12 @@ function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: n
     -- Parent to workspace
     part.Parent = workspace
 
-    -- Store state
+    -- Store state (conveyorSpeed is in blocks/sec, scale to studs/sec)
     local state: MorassState = {
         part = part,
         positionZ = spawnZ,
         startZ = startZ,
-        conveyorSpeed = layout.conveyorSpeed,
+        conveyorSpeed = layout.conveyorSpeed * BLOCK_SCALE,
         morassVisual = layout.morassVisual,
         active = false,
         connection = nil,
@@ -191,8 +193,8 @@ function MorassManager.resetMorass(player: Player)
     -- Stop advancement first
     MorassManager.stopMorass(player)
 
-    -- Reset position to spawn offset
-    state.positionZ = state.startZ - MORASS_SPAWN_OFFSET
+    -- Reset position to spawn offset (scaled)
+    state.positionZ = state.startZ - (MORASS_SPAWN_OFFSET * BLOCK_SCALE)
 
     -- Update the Part position
     state.part.Position = Vector3.new(
