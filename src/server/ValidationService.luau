@@ -23,7 +23,7 @@ local ValidationService = {}
 --============================================================================
 
 local LEVELS_PER_PACK = 10
-local LEVEL_LENGTH = Types.LEVEL_LENGTH -- 1000 blocks
+local LEVEL_LENGTH = Types.LEVEL_LENGTH -- 500 blocks
 local MAX_XP_MULTIPLIER = 20 -- Reasonable upper bound for pack multiplier
 local MAX_THEORETICAL_XP_PER_LEVEL = LEVEL_LENGTH * MAX_XP_MULTIPLIER + Types.LEVEL_COMPLETION_BONUS
 

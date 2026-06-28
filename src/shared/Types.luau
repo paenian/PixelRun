@@ -145,7 +145,7 @@ Types.POWER_UP_DEFINITIONS = {
 
 --- Level dimensions
 Types.LEVEL_WIDTH = 10              -- Blocks wide
-Types.LEVEL_LENGTH = 1000           -- Blocks long
+Types.LEVEL_LENGTH = 500            -- Blocks long
 
 --- XP configuration
 Types.XP_PER_BLOCK = 1             -- Base XP per block traveled

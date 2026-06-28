@@ -73,13 +73,13 @@ TestHarness.property("Property 2: Obstacle Density Within Bounds", 100, function
     local levelNum = TestHarness.randomInt(rng, 1, 10)
     local density = getObstacleDensity(levelNum)
     
-    -- Level length is always 1000 blocks
-    local LEVEL_LENGTH = 1000
+    -- Level length is always 500 blocks
+    local LEVEL_LENGTH = 500
     local obstacleCount = density * LEVEL_LENGTH
     
-    -- Expected bounds: 20 obstacles at level 1, 100 obstacles at level 10
-    local MIN_OBSTACLES = 20  -- 1000 * (1/50)
-    local MAX_OBSTACLES = 100 -- 1000 * (1/10)
+    -- Expected bounds: 10 obstacles at level 1, 50 obstacles at level 10
+    local MIN_OBSTACLES = 10  -- 500 * (1/50)
+    local MAX_OBSTACLES = 50  -- 500 * (1/10)
     
     -- Verify density produces obstacle count within bounds
     local withinBounds = obstacleCount >= MIN_OBSTACLES and obstacleCount <= MAX_OBSTACLES

@@ -32,6 +32,7 @@ local DataStoreManager = require(ServerScriptService.DataStoreManager)
 local PackRegistry = require(ServerScriptService.PackRegistry)
 local ValidationService = require(ServerScriptService.ValidationService)
 local RateLimiter = require(ServerScriptService.RateLimiter)
+local LobbyBuilder = require(ServerScriptService.LobbyBuilder)
 local TetrisPack = require(ReplicatedStorage.LevelPacks.TetrisPack)
 local Types = require(ReplicatedStorage.Types)
 local LevelUtils = require(ReplicatedStorage.LevelUtils)
@@ -69,12 +70,14 @@ local remoteFunctions: { [string]: RemoteFunction } = {}
 --============================================================================
 
 local LEVEL_START_POSITION = Vector3.new(10, 5, 0)  -- Scaled: center of 20-stud-wide track, above ground
-local LOBBY_SPAWN_POSITION = Vector3.new(0, 5, 0)
-local LEVEL_LENGTH = Types.LEVEL_LENGTH  -- 1000 blocks
+local LOBBY_SPAWN_POSITION = Vector3.new(0, 5, 0)   -- Updated by LobbyBuilder.init()
+local LEVEL_LENGTH = Types.LEVEL_LENGTH  -- 500 blocks
 local BLOCK_SCALE = 2                    -- Must match LevelGenerator.BLOCK_SCALE
-local LEVEL_LENGTH_STUDS = LEVEL_LENGTH * BLOCK_SCALE  -- 2000 studs
+local LEVEL_LENGTH_STUDS = LEVEL_LENGTH * BLOCK_SCALE  -- 1000 studs
 local XP_UPDATE_INTERVAL = 1  -- Send XP updates every 1 second
 local LEVELS_PER_PACK = 10  -- Number of levels in each pack
+local GATE_COOLDOWN = 2  -- Seconds between gate triggers per player
+local gateCooldowns: { [Player]: number } = {}  -- Prevent repeated gate triggers
 
 --============================================================================
 -- Remote Events Setup
@@ -289,10 +292,24 @@ local function sendToLobby(player: Player)
         end
     end
 
-    -- Fire ShowLobby RemoteEvent to client
+    -- Gather leaderboard snapshot for lobby display (top 5 each)
+    local topXP = LeaderboardService.getTopXP(5)
+    local topLevel = LeaderboardService.getTopLevel(5)
+    local playerRankXP, playerValueXP = LeaderboardService.getPlayerRank(player.UserId, "xp")
+    local playerRankLevel, playerValueLevel = LeaderboardService.getPlayerRank(player.UserId, "level")
+
+    -- Fire ShowLobby RemoteEvent to client with packs + leaderboard data
     if remoteEvents["ShowLobby"] then
         remoteEvents["ShowLobby"]:FireClient(player, {
             packs = packDisplayList,
+            leaderboard = {
+                topXP = topXP,
+                topLevel = topLevel,
+                playerRankXP = playerRankXP,
+                playerValueXP = playerValueXP,
+                playerRankLevel = playerRankLevel,
+                playerValueLevel = playerValueLevel,
+            },
         })
     end
 end
@@ -517,6 +534,20 @@ local function onPlayerJoin(player: Player)
     -- Brief wait for physics to settle
     task.wait(0.5)
 
+    -- Set player collision height to 3 blocks (6 studs) so they cannot walk
+    -- through gaps smaller than 3 blocks. The default R15 character is ~5 studs;
+    -- we increase HipHeight to make the collision capsule 6 studs tall.
+    local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
+    if humanoid then
+        humanoid.HipHeight = 2.5 -- Raises the capsule so total height ≈ 6 studs (3 blocks)
+    end
+
+    -- Also set this on future respawns
+    player.CharacterAdded:Connect(function(newCharacter: Model)
+        local newHumanoid = newCharacter:WaitForChild("Humanoid") :: Humanoid
+        newHumanoid.HipHeight = 2.5
+    end)
+
     -- Load player data from DataStore (or use defaults on failure)
     local profileData = DataStoreManager.loadPlayerData(player.UserId)
     if not profileData then
@@ -560,6 +591,9 @@ local function onPlayerLeave(player: Player)
 
     -- Clean up rate limiter state
     RateLimiter.reset(player.UserId)
+
+    -- Clean up gate cooldown
+    gateCooldowns[player] = nil
 end
 
 --============================================================================
@@ -644,11 +678,55 @@ local function init()
     -- Initialize PackRegistry: auto-discover and register all level packs
     PackRegistry.init()
 
+    -- Build the physical 3D lobby (ground, gate, shop, signs)
+    local gateTrigger = LobbyBuilder.init()
+    LOBBY_SPAWN_POSITION = LobbyBuilder.getSpawnPosition()
+
     -- Start DataStoreManager auto-save loop
     DataStoreManager.startAutoSave()
 
     -- Create RemoteEvents folder for client communication
     createRemoteEvents()
+
+    -- Wire the Tetris gate touch trigger to start level when a player walks through
+    if gateTrigger then
+        gateTrigger.Touched:Connect(function(hit: BasePart)
+            -- Find the player from the touched part
+            local character = hit.Parent
+            if not character then
+                return
+            end
+            local player = Players:GetPlayerFromCharacter(character)
+            if not player then
+                return
+            end
+
+            -- Cooldown check (prevent repeated triggers)
+            local now = tick()
+            if gateCooldowns[player] and (now - gateCooldowns[player]) < GATE_COOLDOWN then
+                return
+            end
+            gateCooldowns[player] = now
+
+            -- Only trigger if player is in lobby (not actively in a level)
+            local state = playerStates[player]
+            if state and state.isActive then
+                return
+            end
+
+            -- Start Tetris pack level 1 (or next uncompleted level)
+            local levelNum = 1
+            if state and state.completions["tetris"] then
+                -- Start at the next uncompleted level
+                local completed = #state.completions["tetris"]
+                if completed < LEVELS_PER_PACK then
+                    levelNum = completed + 1
+                end
+            end
+
+            startLevel(player, "tetris", levelNum)
+        end)
+    end
 
     -- Listen for player level choices
     if remoteEvents["LevelChoice"] then
@@ -825,6 +903,16 @@ local function init()
 
     -- Start periodic XP update broadcasts
     RunService.Heartbeat:Connect(onXPUpdateHeartbeat)
+
+    -- Periodically update the physical leaderboard boards in the lobby (every 30s)
+    task.spawn(function()
+        while true do
+            task.wait(30)
+            local topXP = LeaderboardService.getTopXP(5)
+            local topLevel = LeaderboardService.getTopLevel(5)
+            LobbyBuilder.updateLeaderboards(topXP, topLevel)
+        end
+    end)
 end
 
 -- Run initialization
