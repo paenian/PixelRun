@@ -1,19 +1,25 @@
 --!strict
 --[[
-    LobbyBuilder.luau - Physical 3D lobby construction
+    LobbyBuilder.luau - Physical 3D lobby matching Roblox design conventions
 
-    Builds the lobby as a walkable 3D space in Workspace containing:
-    - Large flat ground platform with spawn point at center
-    - Tetris-piece archway gate (portal to Tetris pack level 1)
-    - Power-up upgrade shop area (pedestals with signs)
-    - "Coming Soon" sign for Pipe World
-    - Leaderboard display boards (physical SurfaceGui billboards)
-    - Decorative boundary walls
-
-    The Tetris gate uses a TouchPart to detect when a player walks through,
-    triggering level start on the server. The gate is built from colored
-    blocks arranged as Tetris I, T, and L pieces forming an arch.
+    Builds an open spawn-island lobby with:
+    - Circular spawn platform with glowing trim
+    - Invisible barriers (no visible walls)
+    - Brick paths radiating to zones
+    - Spinning Tetris centerpiece landmark
+    - Tetris portal (archway with particles + progress)
+    - Pipe World locked preview portal
+    - Shop NPC booth with ProximityPrompt
+    - Codes terminal with ProximityPrompt
+    - Daily Spin wheel with ProximityPrompt
+    - Leaderboard podiums (gold/silver/bronze)
+    - Social gathering space with seating
+    - Ambient effects (particles, fog, path lights)
+    - Lobby music trigger
 ]]
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 
 local LobbyBuilder = {}
 
@@ -21,37 +27,27 @@ local LobbyBuilder = {}
 -- Constants
 --============================================================================
 
-local BLOCK = 2 -- 1 game block = 2 studs (matches LevelGenerator.BLOCK_SCALE)
+local B = 2 -- Block scale: 1 game block = 2 studs
 
--- Lobby dimensions (in studs)
-local GROUND_SIZE = Vector3.new(60 * BLOCK, 1, 60 * BLOCK) -- 120x120 studs
-local GROUND_POS = Vector3.new(0, -0.5, 0)
+-- Layout positions (studs) — lobby is ~200×200 centered at origin
+local SPAWN_POS = Vector3.new(0, 1, 0)
+local CENTERPIECE_POS = Vector3.new(0, 12 * B, 0)
+local TETRIS_PORTAL_POS = Vector3.new(0, 0, 35 * B)
+local PIPEWORLD_PORTAL_POS = Vector3.new(25 * B, 0, 25 * B)
+local SHOP_POS = Vector3.new(-25 * B, 0, 10 * B)
+local CODES_POS = Vector3.new(-20 * B, 0, -20 * B)
+local SPIN_POS = Vector3.new(20 * B, 0, -20 * B)
+local PODIUM_POS = Vector3.new(0, 0, -30 * B)
+local SOCIAL_POS = Vector3.new(25 * B, 0, -5 * B)
 
--- Spawn
-local SPAWN_POSITION = Vector3.new(0, 3, 0)
+-- Ground
+local GROUND_RADIUS = 50 * B -- 100 studs radius
+local GROUND_COLOR = Color3.fromRGB(80, 90, 80)
+local PATH_COLOR = Color3.fromRGB(140, 110, 80)
+local SPAWN_PLATFORM_COLOR = Color3.fromRGB(50, 50, 65)
+local SPAWN_TRIM_COLOR = Color3.fromRGB(0, 200, 255)
 
--- Tetris Gate (centered at +Z side of lobby)
-local GATE_CENTER = Vector3.new(0, 0, 40 * BLOCK) -- 80 studs forward from center
-local GATE_WIDTH = 5 * BLOCK -- 10 studs wide opening
-local GATE_HEIGHT = 5 * BLOCK -- 10 studs tall opening
-
--- Shop area (left side)
-local SHOP_CENTER = Vector3.new(-20 * BLOCK, 0, 0)
-
--- Coming Soon sign (right side)
-local COMING_SOON_CENTER = Vector3.new(20 * BLOCK, 0, 30 * BLOCK)
-
--- Leaderboard boards (near spawn, flanking)
-local LEADERBOARD_LEFT_POS = Vector3.new(-12 * BLOCK, 4 * BLOCK, -10 * BLOCK)
-local LEADERBOARD_RIGHT_POS = Vector3.new(12 * BLOCK, 4 * BLOCK, -10 * BLOCK)
-
--- Colors
-local GROUND_COLOR = Color3.fromRGB(45, 45, 55)
-local WALL_COLOR = Color3.fromRGB(30, 30, 40)
-local SHOP_PEDESTAL_COLOR = Color3.fromRGB(60, 60, 80)
-local SIGN_COLOR = Color3.fromRGB(20, 20, 30)
-
--- Tetris piece colors
+-- Tetris colors
 local CYAN = Color3.fromRGB(0, 255, 255)
 local YELLOW = Color3.fromRGB(255, 255, 0)
 local PURPLE = Color3.fromRGB(128, 0, 128)
@@ -60,512 +56,924 @@ local RED = Color3.fromRGB(255, 0, 0)
 local ORANGE = Color3.fromRGB(255, 165, 0)
 local BLUE = Color3.fromRGB(0, 0, 255)
 
+-- UI
+local SIGN_COLOR = Color3.fromRGB(20, 20, 30)
+local GOLD = Color3.fromRGB(255, 215, 0)
+local SILVER = Color3.fromRGB(192, 192, 192)
+local BRONZE = Color3.fromRGB(205, 127, 50)
+
 --============================================================================
 -- State
 --============================================================================
 
 local lobbyModel: Model? = nil
 local gateTouchPart: BasePart? = nil
+local centerpieceModel: Model? = nil
 
 --============================================================================
--- Helper: Create an anchored block
+-- Helpers
 --============================================================================
 
-local function createBlock(props: {
-	name: string,
-	size: Vector3,
-	position: Vector3,
-	color: Color3,
-	material: Enum.Material?,
-	transparency: number?,
-	canCollide: boolean?,
+local function createPart(props: {
+	name: string, size: Vector3, position: Vector3?, cframe: CFrame?,
+	color: Color3, material: Enum.Material?, transparency: number?,
+	canCollide: boolean?, anchored: boolean?, shape: Enum.PartType?,
 	parent: Instance,
 }): Part
-	local part = Instance.new("Part")
-	part.Name = props.name
-	part.Size = props.size
-	part.Position = props.position
-	part.Color = props.color
-	part.Material = props.material or Enum.Material.SmoothPlastic
-	part.Transparency = props.transparency or 0
-	part.Anchored = true
-	part.CanCollide = if props.canCollide ~= nil then props.canCollide else true
-	part.Parent = props.parent
-	return part
+	local p = Instance.new("Part")
+	p.Name = props.name
+	p.Size = props.size
+	if props.cframe then
+		p.CFrame = props.cframe
+	elseif props.position then
+		p.Position = props.position
+	end
+	p.Color = props.color
+	p.Material = props.material or Enum.Material.SmoothPlastic
+	p.Transparency = props.transparency or 0
+	p.Anchored = if props.anchored ~= nil then props.anchored else true
+	p.CanCollide = if props.canCollide ~= nil then props.canCollide else true
+	if props.shape then p.Shape = props.shape end
+	p.Parent = props.parent
+	return p
 end
 
---============================================================================
--- Helper: Create a SurfaceGui text sign on a part
---============================================================================
-
-local function addSurfaceText(part: Part, text: string, textColor: Color3, textSize: number, face: Enum.NormalId?)
-	local surfaceGui = Instance.new("SurfaceGui")
-	surfaceGui.Name = "SignGui"
-	surfaceGui.Face = face or Enum.NormalId.Front
-	surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-	surfaceGui.PixelsPerStud = 30
-	surfaceGui.Parent = part
-
+local function addSurfaceText(part: Part, text: string, color: Color3, size: number, face: Enum.NormalId?)
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "SignGui"
+	gui.Face = face or Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 30
+	gui.Parent = part
 	local label = Instance.new("TextLabel")
 	label.Name = "Text"
 	label.Size = UDim2.new(1, 0, 1, 0)
 	label.BackgroundTransparency = 1
-	label.TextColor3 = textColor
-	label.TextSize = textSize
+	label.TextColor3 = color
+	label.TextSize = size
 	label.Font = Enum.Font.GothamBold
 	label.Text = text
 	label.TextWrapped = true
-	label.Parent = surfaceGui
+	label.Parent = gui
+end
+
+local function addProximityPrompt(parent: Instance, text: string, action: string, distance: number?): ProximityPrompt
+	local pp = Instance.new("ProximityPrompt")
+	pp.ObjectText = text
+	pp.ActionText = action
+	pp.MaxActivationDistance = distance or 8
+	pp.HoldDuration = 0
+	pp.Parent = parent
+	return pp
+end
+
+local function addPointLight(parent: Instance, color: Color3, brightness: number?, range: number?)
+	local light = Instance.new("PointLight")
+	light.Color = color
+	light.Brightness = brightness or 1
+	light.Range = range or 12
+	light.Parent = parent
 end
 
 --============================================================================
--- Build: Ground and Boundaries
+-- 1.1 Ground, Spawn Platform, Invisible Barriers, Paths
 --============================================================================
 
 local function buildGround(parent: Model)
-	-- Main floor
-	createBlock({
+	-- Main ground (large circular feel via square with rounded appearance)
+	createPart({
 		name = "LobbyGround",
-		size = GROUND_SIZE,
-		position = GROUND_POS,
+		size = Vector3.new(GROUND_RADIUS * 2, 1, GROUND_RADIUS * 2),
+		position = Vector3.new(0, -0.5, 0),
 		color = GROUND_COLOR,
-		material = Enum.Material.Slate,
+		material = Enum.Material.Grass,
 		parent = parent,
 	})
 
-	-- Boundary walls (4 sides, tall enough players can't jump over)
-	local wallHeight = 8 * BLOCK
-	local wallThickness = BLOCK
-	local halfX = GROUND_SIZE.X / 2
-	local halfZ = GROUND_SIZE.Z / 2
-
-	-- Back wall (-Z)
-	createBlock({
-		name = "WallBack",
-		size = Vector3.new(GROUND_SIZE.X, wallHeight, wallThickness),
-		position = Vector3.new(0, wallHeight / 2, -halfZ),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-
-	-- Left wall (-X)
-	createBlock({
-		name = "WallLeft",
-		size = Vector3.new(wallThickness, wallHeight, GROUND_SIZE.Z),
-		position = Vector3.new(-halfX, wallHeight / 2, 0),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-
-	-- Right wall (+X)
-	createBlock({
-		name = "WallRight",
-		size = Vector3.new(wallThickness, wallHeight, GROUND_SIZE.Z),
-		position = Vector3.new(halfX, wallHeight / 2, 0),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-
-	-- Front wall (+Z) with a gap for the gate
-	local frontWallSegmentWidth = (GROUND_SIZE.X - GATE_WIDTH) / 2 - BLOCK
-	-- Left segment
-	createBlock({
-		name = "WallFrontLeft",
-		size = Vector3.new(frontWallSegmentWidth, wallHeight, wallThickness),
-		position = Vector3.new(-(frontWallSegmentWidth / 2 + GATE_WIDTH / 2 + BLOCK / 2), wallHeight / 2, halfZ),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-	-- Right segment
-	createBlock({
-		name = "WallFrontRight",
-		size = Vector3.new(frontWallSegmentWidth, wallHeight, wallThickness),
-		position = Vector3.new((frontWallSegmentWidth / 2 + GATE_WIDTH / 2 + BLOCK / 2), wallHeight / 2, halfZ),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-end
-
---============================================================================
--- Build: Tetris Piece Gate (Archway Portal)
---============================================================================
-
-local function buildTetrisGate(parent: Model): Part
-	local gateModel = Instance.new("Model")
-	gateModel.Name = "TetrisGate"
-	gateModel.Parent = parent
-
-	local gateZ = GATE_CENTER.Z
-	local gateX = GATE_CENTER.X
-
-	-- The gate is an arch made of Tetris pieces:
-	-- Left pillar: stacked I-pieces (cyan) going up
-	-- Right pillar: stacked J/L-pieces (blue/orange)
-	-- Top beam: I-piece (cyan) spanning the opening
-	-- Decorative: T, S, Z pieces around the arch
-
-	-- Left pillar (5 blocks tall, 1 wide)
-	for row = 0, 4 do
-		local colors = {CYAN, PURPLE, GREEN, CYAN, YELLOW}
-		createBlock({
-			name = "GateLeft_" .. tostring(row),
-			size = Vector3.new(BLOCK, BLOCK, BLOCK),
-			position = Vector3.new(gateX - GATE_WIDTH / 2, (row + 0.5) * BLOCK, gateZ),
-			color = colors[row + 1],
-			material = Enum.Material.SmoothPlastic,
-			parent = gateModel,
-		})
-	end
-
-	-- Right pillar (5 blocks tall, 1 wide)
-	for row = 0, 4 do
-		local colors = {ORANGE, BLUE, RED, ORANGE, YELLOW}
-		createBlock({
-			name = "GateRight_" .. tostring(row),
-			size = Vector3.new(BLOCK, BLOCK, BLOCK),
-			position = Vector3.new(gateX + GATE_WIDTH / 2, (row + 0.5) * BLOCK, gateZ),
-			color = colors[row + 1],
-			material = Enum.Material.SmoothPlastic,
-			parent = gateModel,
-		})
-	end
-
-	-- Top beam: I-piece spanning the opening (7 blocks wide to overlap pillars)
-	local beamWidth = GATE_WIDTH + 2 * BLOCK
-	for col = 0, 6 do
-		local colors = {PURPLE, CYAN, GREEN, CYAN, CYAN, GREEN, PURPLE}
-		createBlock({
-			name = "GateTop_" .. tostring(col),
-			size = Vector3.new(BLOCK, BLOCK, BLOCK),
-			position = Vector3.new(
-				gateX - beamWidth / 2 + (col + 0.5) * BLOCK,
-				(5 + 0.5) * BLOCK,
-				gateZ
-			),
-			color = colors[col + 1],
-			material = Enum.Material.SmoothPlastic,
-			parent = gateModel,
-		})
-	end
-
-	-- Decorative top row (T-shape crown)
-	for col = 1, 5 do
-		local colors = {YELLOW, RED, YELLOW, RED, YELLOW}
-		createBlock({
-			name = "GateCrown_" .. tostring(col),
-			size = Vector3.new(BLOCK, BLOCK, BLOCK),
-			position = Vector3.new(
-				gateX - beamWidth / 2 + (col + 0.5) * BLOCK,
-				(6 + 0.5) * BLOCK,
-				gateZ
-			),
-			color = colors[col],
-			material = Enum.Material.Neon,
-			parent = gateModel,
-		})
-	end
-
-	-- Sign above the gate
-	local signPart = createBlock({
-		name = "GateSign",
-		size = Vector3.new(beamWidth, 2 * BLOCK, 0.5),
-		position = Vector3.new(gateX, (7 + 1) * BLOCK, gateZ - BLOCK),
-		color = SIGN_COLOR,
-		parent = gateModel,
-	})
-	addSurfaceText(signPart, "TETRIS WORLD", Color3.fromRGB(0, 255, 255), 40, Enum.NormalId.Back)
-
-	-- Invisible touch-detection part inside the gate opening
-	-- Players walking through this triggers level start
-	local touchPart = Instance.new("Part")
-	touchPart.Name = "GateTrigger"
-	touchPart.Size = Vector3.new(GATE_WIDTH, GATE_HEIGHT, BLOCK * 2)
-	touchPart.Position = Vector3.new(gateX, GATE_HEIGHT / 2, gateZ)
-	touchPart.Anchored = true
-	touchPart.CanCollide = false
-	touchPart.Transparency = 1
-	touchPart.Parent = gateModel
-
-	return touchPart
-end
-
---============================================================================
--- Build: Power-Up Shop Area
---============================================================================
-
-local function buildShopArea(parent: Model)
-	local shopModel = Instance.new("Model")
-	shopModel.Name = "UpgradeShop"
-	shopModel.Parent = parent
-
-	-- Shop platform (raised slightly)
-	createBlock({
-		name = "ShopPlatform",
-		size = Vector3.new(16 * BLOCK, BLOCK, 10 * BLOCK),
-		position = SHOP_CENTER + Vector3.new(0, 0.5, 0),
-		color = Color3.fromRGB(50, 50, 70),
+	-- Central spawn platform (circular cylinder)
+	local spawnPlat = createPart({
+		name = "SpawnPlatform",
+		size = Vector3.new(12 * B, 1, 12 * B),
+		position = Vector3.new(0, 0.5, 0),
+		color = SPAWN_PLATFORM_COLOR,
 		material = Enum.Material.Marble,
-		parent = shopModel,
-	})
-
-	-- Shop back wall with sign
-	local shopWall = createBlock({
-		name = "ShopWall",
-		size = Vector3.new(16 * BLOCK, 6 * BLOCK, BLOCK),
-		position = SHOP_CENTER + Vector3.new(0, 3 * BLOCK + BLOCK, -5 * BLOCK),
-		color = SIGN_COLOR,
-		parent = shopModel,
-	})
-	addSurfaceText(shopWall, "POWER-UPS", Color3.fromRGB(255, 255, 100), 48, Enum.NormalId.Front)
-
-	-- Three upgrade pedestals
-	local upgrades = {
-		{ name = "Higher Jump", color = Color3.fromRGB(100, 200, 255), xOffset = -5 * BLOCK },
-		{ name = "Double Jump", color = Color3.fromRGB(255, 200, 100), xOffset = 0 },
-		{ name = "Faster Speed", color = Color3.fromRGB(100, 255, 150), xOffset = 5 * BLOCK },
-	}
-
-	for _, upgrade in upgrades do
-		-- Pedestal
-		createBlock({
-			name = "Pedestal_" .. upgrade.name,
-			size = Vector3.new(3 * BLOCK, 2 * BLOCK, 3 * BLOCK),
-			position = SHOP_CENTER + Vector3.new(upgrade.xOffset, BLOCK + BLOCK, 0),
-			color = SHOP_PEDESTAL_COLOR,
-			material = Enum.Material.Marble,
-			parent = shopModel,
-		})
-
-		-- Floating power-up indicator (glowing block on top)
-		createBlock({
-			name = "PowerUp_" .. upgrade.name,
-			size = Vector3.new(BLOCK, BLOCK, BLOCK),
-			position = SHOP_CENTER + Vector3.new(upgrade.xOffset, 3.5 * BLOCK + BLOCK, 0),
-			color = upgrade.color,
-			material = Enum.Material.Neon,
-			parent = shopModel,
-		})
-
-		-- Name sign
-		local namePart = createBlock({
-			name = "Sign_" .. upgrade.name,
-			size = Vector3.new(3 * BLOCK, BLOCK, 0.2),
-			position = SHOP_CENTER + Vector3.new(upgrade.xOffset, 2 * BLOCK + BLOCK, 1.6 * BLOCK),
-			color = SIGN_COLOR,
-			transparency = 0.2,
-			parent = shopModel,
-		})
-		addSurfaceText(namePart, upgrade.name, upgrade.color, 24, Enum.NormalId.Front)
-	end
-end
-
---============================================================================
--- Build: Coming Soon Sign
---============================================================================
-
-local function buildComingSoonSign(parent: Model)
-	local signModel = Instance.new("Model")
-	signModel.Name = "ComingSoon_PipeWorld"
-	signModel.Parent = parent
-
-	-- Large sign board
-	local board = createBlock({
-		name = "SignBoard",
-		size = Vector3.new(10 * BLOCK, 6 * BLOCK, BLOCK),
-		position = COMING_SOON_CENTER + Vector3.new(0, 3 * BLOCK, 0),
-		color = Color3.fromRGB(30, 35, 25),
-		parent = signModel,
-	})
-	addSurfaceText(board, "PIPE WORLD\n\nCOMING SOON", Color3.fromRGB(255, 180, 50), 36, Enum.NormalId.Back)
-
-	-- Support posts
-	createBlock({
-		name = "PostLeft",
-		size = Vector3.new(BLOCK, 6 * BLOCK, BLOCK),
-		position = COMING_SOON_CENTER + Vector3.new(-4.5 * BLOCK, 3 * BLOCK, 0),
-		color = Color3.fromRGB(0, 180, 0),
-		parent = signModel,
-	})
-	createBlock({
-		name = "PostRight",
-		size = Vector3.new(BLOCK, 6 * BLOCK, BLOCK),
-		position = COMING_SOON_CENTER + Vector3.new(4.5 * BLOCK, 3 * BLOCK, 0),
-		color = Color3.fromRGB(0, 180, 0),
-		parent = signModel,
-	})
-
-	-- Decorative pipe shapes (green cylinders representing the Pipe World theme)
-	local pipe = Instance.new("Part")
-	pipe.Name = "DecoPipe"
-	pipe.Shape = Enum.PartType.Cylinder
-	pipe.Size = Vector3.new(4 * BLOCK, 2 * BLOCK, 2 * BLOCK)
-	pipe.CFrame = CFrame.new(COMING_SOON_CENTER + Vector3.new(0, BLOCK, 2 * BLOCK)) * CFrame.Angles(0, 0, math.rad(90))
-	pipe.Color = Color3.fromRGB(0, 200, 0)
-	pipe.Material = Enum.Material.SmoothPlastic
-	pipe.Anchored = true
-	pipe.Parent = signModel
-end
-
---============================================================================
--- Build: Leaderboard Display Boards
---============================================================================
-
-local function buildLeaderboardBoards(parent: Model)
-	-- XP Leaderboard (left side of spawn, facing player)
-	local xpBoard = createBlock({
-		name = "LeaderboardXP",
-		size = Vector3.new(8 * BLOCK, 6 * BLOCK, 0.5),
-		position = LEADERBOARD_LEFT_POS,
-		color = SIGN_COLOR,
+		shape = Enum.PartType.Cylinder,
 		parent = parent,
 	})
-	addSurfaceText(xpBoard, "TOP XP\n\n1. ---\n2. ---\n3. ---\n4. ---\n5. ---", Color3.fromRGB(255, 255, 100), 28, Enum.NormalId.Front)
+	-- Cylinder: Size.X = length (height when rotated), Y/Z = diameter
+	spawnPlat.Size = Vector3.new(1, 12 * B, 12 * B)
+	spawnPlat.CFrame = CFrame.new(0, 0.5, 0) * CFrame.Angles(0, 0, math.rad(90))
 
-	-- Support post
-	createBlock({
-		name = "LeaderboardXP_Post",
-		size = Vector3.new(BLOCK, LEADERBOARD_LEFT_POS.Y + 3 * BLOCK, BLOCK),
-		position = Vector3.new(LEADERBOARD_LEFT_POS.X, (LEADERBOARD_LEFT_POS.Y + 3 * BLOCK) / 2 - 3 * BLOCK, LEADERBOARD_LEFT_POS.Z),
-		color = WALL_COLOR,
+	-- Glowing trim ring around spawn
+	local trimRing = createPart({
+		name = "SpawnTrim",
+		size = Vector3.new(1.5, 13 * B, 13 * B),
+		cframe = CFrame.new(0, 0.2, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		color = SPAWN_TRIM_COLOR,
+		material = Enum.Material.Neon,
+		shape = Enum.PartType.Cylinder,
+		canCollide = false,
+		transparency = 0.3,
 		parent = parent,
 	})
+	addPointLight(trimRing, SPAWN_TRIM_COLOR, 0.6, 20)
 
-	-- Level Leaderboard (right side of spawn, facing player)
-	local levelBoard = createBlock({
-		name = "LeaderboardLevel",
-		size = Vector3.new(8 * BLOCK, 6 * BLOCK, 0.5),
-		position = LEADERBOARD_RIGHT_POS,
-		color = SIGN_COLOR,
-		parent = parent,
-	})
-	addSurfaceText(levelBoard, "TOP LEVEL\n\n1. ---\n2. ---\n3. ---\n4. ---\n5. ---", Color3.fromRGB(100, 200, 255), 28, Enum.NormalId.Front)
-
-	-- Support post
-	createBlock({
-		name = "LeaderboardLevel_Post",
-		size = Vector3.new(BLOCK, LEADERBOARD_RIGHT_POS.Y + 3 * BLOCK, BLOCK),
-		position = Vector3.new(LEADERBOARD_RIGHT_POS.X, (LEADERBOARD_RIGHT_POS.Y + 3 * BLOCK) / 2 - 3 * BLOCK, LEADERBOARD_RIGHT_POS.Z),
-		color = WALL_COLOR,
-		parent = parent,
-	})
-end
-
---============================================================================
--- Build: Spawn Point
---============================================================================
-
-local function buildSpawnPoint(parent: Model)
+	-- SpawnLocation
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "LobbySpawn"
-	spawn.Size = Vector3.new(4 * BLOCK, 1, 4 * BLOCK)
-	spawn.Position = Vector3.new(SPAWN_POSITION.X, 0.5, SPAWN_POSITION.Z)
+	spawn.Size = Vector3.new(6, 1, 6)
+	spawn.Position = SPAWN_POS
 	spawn.Anchored = true
-	spawn.CanCollide = true
-	spawn.Color = Color3.fromRGB(60, 60, 80)
-	spawn.Material = Enum.Material.SmoothPlastic
+	spawn.Transparency = 1
+	spawn.CanCollide = false
 	spawn.Neutral = true
 	spawn.Parent = parent
+end
+
+local function buildInvisibleBarriers(parent: Model)
+	local wallH = 30 * B
+	local half = GROUND_RADIUS + 5
+	local sides = {
+		{ name = "BarrierN", pos = Vector3.new(0, wallH/2, half), size = Vector3.new(half*2, wallH, 2) },
+		{ name = "BarrierS", pos = Vector3.new(0, wallH/2, -half), size = Vector3.new(half*2, wallH, 2) },
+		{ name = "BarrierE", pos = Vector3.new(half, wallH/2, 0), size = Vector3.new(2, wallH, half*2) },
+		{ name = "BarrierW", pos = Vector3.new(-half, wallH/2, 0), size = Vector3.new(2, wallH, half*2) },
+	}
+	for _, s in sides do
+		createPart({
+			name = s.name,
+			size = s.size,
+			position = s.pos,
+			color = Color3.new(1,1,1),
+			transparency = 1,
+			parent = parent,
+		})
+	end
+
+	-- Kill plane below
+	local kill = createPart({
+		name = "KillPlane",
+		size = Vector3.new(500, 1, 500),
+		position = Vector3.new(0, -20, 0),
+		color = Color3.new(0,0,0),
+		transparency = 1,
+		canCollide = false,
+		parent = parent,
+	})
+	kill:SetAttribute("IsKillPart", true)
+end
+
+local function buildPaths(parent: Model)
+	-- Paths from spawn to key zones (simple elongated parts on the ground)
+	local paths = {
+		{ to = TETRIS_PORTAL_POS, color = CYAN },
+		{ to = PIPEWORLD_PORTAL_POS, color = GREEN },
+		{ to = SHOP_POS, color = YELLOW },
+		{ to = PODIUM_POS, color = GOLD },
+		{ to = CODES_POS, color = PURPLE },
+		{ to = SPIN_POS, color = ORANGE },
+	}
+	for i, pathDef in paths do
+		local dir = pathDef.to - SPAWN_POS
+		local length = dir.Magnitude
+		local mid = SPAWN_POS + dir * 0.5
+		local angle = math.atan2(dir.X, dir.Z)
+
+		createPart({
+			name = "Path_" .. tostring(i),
+			size = Vector3.new(3 * B, 0.2, length),
+			cframe = CFrame.new(mid.X, 0.1, mid.Z) * CFrame.Angles(0, angle, 0),
+			color = pathDef.color,
+			material = Enum.Material.Brick,
+			canCollide = false,
+			parent = parent,
+		})
+	end
+end
+
+--============================================================================
+-- 1.2 Spinning Tetris Centerpiece
+--============================================================================
+
+local function buildCenterpiece(parent: Model)
+	local cpModel = Instance.new("Model")
+	cpModel.Name = "Centerpiece"
+	cpModel.Parent = parent
+
+	-- Build a T-piece shape (large, 3x scale) that will spin
+	local pieceScale = 3 * B
+	local colors = { PURPLE, PURPLE, PURPLE, PURPLE }
+	local offsets = { {0,0}, {1,0}, {2,0}, {1,1} } -- T-piece
+
+	local pivotPart: Part? = nil
+	for idx, off in offsets do
+		local block = createPart({
+			name = "CenterBlock_" .. tostring(idx),
+			size = Vector3.new(pieceScale, pieceScale, pieceScale),
+			position = CENTERPIECE_POS + Vector3.new(
+				(off[1] - 1) * pieceScale,
+				off[2] * pieceScale,
+				0
+			),
+			color = colors[idx],
+			material = Enum.Material.Neon,
+			canCollide = false,
+			parent = cpModel,
+		})
+		if idx == 1 then
+			pivotPart = block
+		end
+	end
+
+	-- Add a slow spinning tween on the model pivot
+	if pivotPart then
+		cpModel.PrimaryPart = pivotPart
+		-- Use RunService to rotate the model slowly
+		centerpieceModel = cpModel
+	end
+end
+
+local function startCenterpieceSpin()
+	if not centerpieceModel or not centerpieceModel.PrimaryPart then
+		return
+	end
+	task.spawn(function()
+		while centerpieceModel and centerpieceModel.Parent do
+			local pp = centerpieceModel.PrimaryPart
+			if pp then
+				local cf = pp.CFrame
+				local center = CENTERPIECE_POS
+				-- Rotate all parts around center Y axis
+				for _, child in centerpieceModel:GetChildren() do
+					if child:IsA("BasePart") then
+						local offset = child.Position - center
+						local angle = math.rad(0.5) -- 0.5 degrees per frame
+						local cos, sin = math.cos(angle), math.sin(angle)
+						local newX = offset.X * cos - offset.Z * sin
+						local newZ = offset.X * sin + offset.Z * cos
+						child.Position = center + Vector3.new(newX, offset.Y, newZ)
+					end
+				end
+			end
+			task.wait(1/30)
+		end
+	end)
+end
+
+--============================================================================
+-- 1.3 Tetris Portal (with particles + progress)
+--============================================================================
+
+local function buildTetrisPortal(parent: Model): Part
+	local portal = Instance.new("Model")
+	portal.Name = "TetrisPortal"
+	portal.Parent = parent
+
+	local pos = TETRIS_PORTAL_POS
+	local archW = 7 * B
+	local archH = 7 * B
+	local frameD = 2 * B
+
+	-- Left pillar
+	for row = 0, 6 do
+		local c = ({CYAN, BLUE, PURPLE, GREEN, CYAN, YELLOW, ORANGE})[row + 1]
+		createPart({
+			name = "PillarL_" .. tostring(row),
+			size = Vector3.new(frameD, B, frameD),
+			position = pos + Vector3.new(-archW/2, (row + 0.5) * B, 0),
+			color = c, material = Enum.Material.SmoothPlastic, parent = portal,
+		})
+	end
+
+	-- Right pillar
+	for row = 0, 6 do
+		local c = ({ORANGE, YELLOW, CYAN, GREEN, PURPLE, BLUE, CYAN})[row + 1]
+		createPart({
+			name = "PillarR_" .. tostring(row),
+			size = Vector3.new(frameD, B, frameD),
+			position = pos + Vector3.new(archW/2, (row + 0.5) * B, 0),
+			color = c, material = Enum.Material.SmoothPlastic, parent = portal,
+		})
+	end
+
+	-- Top beam
+	local beamBlocks = math.ceil(archW / B) + 2
+	for col = 0, beamBlocks - 1 do
+		local c = ({CYAN, GREEN, YELLOW, CYAN, PURPLE, ORANGE, CYAN, GREEN, CYAN})[col + 1] or CYAN
+		createPart({
+			name = "Beam_" .. tostring(col),
+			size = Vector3.new(B, frameD, frameD),
+			position = pos + Vector3.new(-archW/2 - B + (col + 0.5) * B, archH + B, 0),
+			color = c, material = Enum.Material.SmoothPlastic, parent = portal,
+		})
+	end
+
+	-- Portal particle effect (inside the opening)
+	local particlePart = createPart({
+		name = "PortalParticles",
+		size = Vector3.new(archW - frameD, archH, 0.5),
+		position = pos + Vector3.new(0, archH/2, 0),
+		color = CYAN, transparency = 0.9, canCollide = false, parent = portal,
+	})
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "Swirl"
+	emitter.Color = ColorSequence.new(CYAN, PURPLE)
+	emitter.Size = NumberSequence.new(0.5, 1.5)
+	emitter.Lifetime = NumberRange.new(1, 2)
+	emitter.Rate = 30
+	emitter.Speed = NumberRange.new(2, 5)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Transparency = NumberSequence.new(0.3, 1)
+	emitter.Parent = particlePart
+
+	-- Pulsing glow
+	addPointLight(particlePart, CYAN, 2, 25)
+
+	-- Sign: "TETRIS WORLD"
+	local sign = createPart({
+		name = "PortalSign",
+		size = Vector3.new(archW + 2*B, 2*B, 0.3),
+		position = pos + Vector3.new(0, archH + 3*B, -B),
+		color = SIGN_COLOR, parent = portal,
+	})
+	addSurfaceText(sign, "TETRIS WORLD", CYAN, 42, Enum.NormalId.Back)
+
+	-- Progress sign below main sign
+	local progSign = createPart({
+		name = "ProgressSign",
+		size = Vector3.new(archW, B, 0.3),
+		position = pos + Vector3.new(0, archH + 1.2*B, -B),
+		color = SIGN_COLOR, transparency = 0.3, parent = portal,
+	})
+	addSurfaceText(progSign, "0/10 complete", Color3.fromRGB(100, 255, 100), 24, Enum.NormalId.Back)
+
+	-- Invisible touch trigger
+	local trigger = Instance.new("Part")
+	trigger.Name = "GateTrigger"
+	trigger.Size = Vector3.new(archW - frameD, archH, 3 * B)
+	trigger.Position = pos + Vector3.new(0, archH/2, 0)
+	trigger.Anchored = true
+	trigger.CanCollide = false
+	trigger.Transparency = 1
+	trigger.Parent = portal
+
+	return trigger
+end
+
+--============================================================================
+-- 1.4 Pipe World Locked Preview Portal
+--============================================================================
+
+local function buildPipeWorldPortal(parent: Model)
+	local portal = Instance.new("Model")
+	portal.Name = "PipeWorldPortal"
+	portal.Parent = parent
+
+	local pos = PIPEWORLD_PORTAL_POS
+	local archW = 6 * B
+	local archH = 6 * B
+	local pipeColor = Color3.fromRGB(0, 180, 0)
+	local brickColor = Color3.fromRGB(180, 100, 50)
+
+	-- Left pillar (pipe green)
+	createPart({
+		name = "PillarL", size = Vector3.new(2*B, archH, 2*B),
+		position = pos + Vector3.new(-archW/2, archH/2, 0),
+		color = pipeColor, material = Enum.Material.SmoothPlastic, parent = portal,
+	})
+
+	-- Right pillar (pipe green)
+	createPart({
+		name = "PillarR", size = Vector3.new(2*B, archH, 2*B),
+		position = pos + Vector3.new(archW/2, archH/2, 0),
+		color = pipeColor, material = Enum.Material.SmoothPlastic, parent = portal,
+	})
+
+	-- Top beam (brick)
+	createPart({
+		name = "TopBeam", size = Vector3.new(archW + 2*B, 2*B, 2*B),
+		position = pos + Vector3.new(0, archH + B, 0),
+		color = brickColor, material = Enum.Material.Brick, parent = portal,
+	})
+
+	-- Translucent barrier (locked)
+	local barrier = createPart({
+		name = "LockBarrier",
+		size = Vector3.new(archW - 2*B, archH, 0.5),
+		position = pos + Vector3.new(0, archH/2, 0),
+		color = pipeColor, transparency = 0.5, canCollide = true, parent = portal,
+	})
+
+	-- Lock icon
+	createPart({
+		name = "LockIcon",
+		size = Vector3.new(2*B, 2*B, 0.3),
+		position = pos + Vector3.new(0, archH/2, -0.5),
+		color = YELLOW, material = Enum.Material.Neon, canCollide = false, parent = portal,
+	})
+
+	-- "COMING SOON" sign
+	local sign = createPart({
+		name = "ComingSoonSign",
+		size = Vector3.new(archW + 2*B, 2*B, 0.3),
+		position = pos + Vector3.new(0, archH + 3.5*B, -B),
+		color = SIGN_COLOR, parent = portal,
+	})
+	addSurfaceText(sign, "PIPE WORLD", pipeColor, 36, Enum.NormalId.Back)
+
+	local subSign = createPart({
+		name = "SubSign",
+		size = Vector3.new(archW, B, 0.3),
+		position = pos + Vector3.new(0, archH + 1.8*B, -B),
+		color = SIGN_COLOR, transparency = 0.2, parent = portal,
+	})
+	addSurfaceText(subSign, "COMING SOON", Color3.fromRGB(255, 180, 50), 24, Enum.NormalId.Back)
+end
+
+--============================================================================
+-- 1.5 Shop NPC Booth
+--============================================================================
+
+local function buildShopBooth(parent: Model)
+	local shop = Instance.new("Model")
+	shop.Name = "ShopBooth"
+	shop.Parent = parent
+
+	local pos = SHOP_POS
+
+	-- Counter
+	createPart({
+		name = "Counter", size = Vector3.new(8*B, 3*B, 2*B),
+		position = pos + Vector3.new(0, 1.5*B, 0),
+		color = Color3.fromRGB(60, 50, 40), material = Enum.Material.Wood, parent = shop,
+	})
+
+	-- Back wall
+	local wall = createPart({
+		name = "BackWall", size = Vector3.new(10*B, 6*B, B),
+		position = pos + Vector3.new(0, 3*B, -2*B),
+		color = SIGN_COLOR, parent = shop,
+	})
+	addSurfaceText(wall, "UPGRADES", YELLOW, 48, Enum.NormalId.Front)
+
+	-- Power-up display items on counter
+	local items = {
+		{ name = "Jump", color = Color3.fromRGB(100, 200, 255), x = -2.5*B },
+		{ name = "DblJump", color = Color3.fromRGB(255, 200, 100), x = 0 },
+		{ name = "Speed", color = Color3.fromRGB(100, 255, 150), x = 2.5*B },
+	}
+	for _, item in items do
+		local glow = createPart({
+			name = "Item_" .. item.name, size = Vector3.new(B, B, B),
+			position = pos + Vector3.new(item.x, 3.5*B, 0),
+			color = item.color, material = Enum.Material.Neon,
+			canCollide = false, parent = shop,
+		})
+		addPointLight(glow, item.color, 0.5, 8)
+	end
+
+	-- NPC (simple block character behind counter)
+	local npcHead = createPart({
+		name = "NPCHead", size = Vector3.new(B, B, B),
+		position = pos + Vector3.new(0, 5*B, -B),
+		color = Color3.fromRGB(255, 200, 150), parent = shop,
+	})
+	createPart({
+		name = "NPCBody", size = Vector3.new(1.5*B, 2*B, B),
+		position = pos + Vector3.new(0, 3.5*B, -B),
+		color = Color3.fromRGB(30, 80, 160), parent = shop,
+	})
+
+	-- ProximityPrompt on counter
+	local promptPart = createPart({
+		name = "ShopPrompt", size = Vector3.new(8*B, 3*B, 3*B),
+		position = pos + Vector3.new(0, 1.5*B, B),
+		color = Color3.new(1,1,1), transparency = 1, canCollide = false, parent = shop,
+	})
+	addProximityPrompt(promptPart, "Upgrade Shop", "Open", 10)
+end
+
+--============================================================================
+-- 1.6 Codes Terminal
+--============================================================================
+
+local function buildCodesTerminal(parent: Model)
+	local terminal = Instance.new("Model")
+	terminal.Name = "CodesTerminal"
+	terminal.Parent = parent
+
+	local pos = CODES_POS
+
+	-- Arcade machine body
+	createPart({
+		name = "Body", size = Vector3.new(3*B, 5*B, 2*B),
+		position = pos + Vector3.new(0, 2.5*B, 0),
+		color = Color3.fromRGB(40, 20, 60), material = Enum.Material.SmoothPlastic, parent = terminal,
+	})
+
+	-- Screen
+	local screen = createPart({
+		name = "Screen", size = Vector3.new(2.5*B, 2*B, 0.2),
+		position = pos + Vector3.new(0, 4*B, B + 0.1),
+		color = Color3.fromRGB(10, 10, 20), parent = terminal,
+	})
+	addSurfaceText(screen, "ENTER CODE", Color3.fromRGB(0, 255, 150), 30, Enum.NormalId.Front)
+
+	-- Top sign
+	local topSign = createPart({
+		name = "TopSign", size = Vector3.new(3.5*B, B, 0.3),
+		position = pos + Vector3.new(0, 5.5*B, B),
+		color = PURPLE, material = Enum.Material.Neon, parent = terminal,
+	})
+	addSurfaceText(topSign, "CODES", Color3.fromRGB(255, 255, 255), 28, Enum.NormalId.Front)
+
+	-- ProximityPrompt
+	addProximityPrompt(screen, "Codes Terminal", "Enter Code", 8)
+end
+
+--============================================================================
+-- 1.7 Daily Spin Wheel
+--============================================================================
+
+local function buildSpinWheel(parent: Model)
+	local wheel = Instance.new("Model")
+	wheel.Name = "DailySpinWheel"
+	wheel.Parent = parent
+
+	local pos = SPIN_POS
+
+	-- Base stand
+	createPart({
+		name = "Stand", size = Vector3.new(2*B, 4*B, 2*B),
+		position = pos + Vector3.new(0, 2*B, 0),
+		color = Color3.fromRGB(60, 60, 80), material = Enum.Material.Metal, parent = wheel,
+	})
+
+	-- Wheel (large cylinder facing player)
+	local wheelPart = createPart({
+		name = "Wheel",
+		size = Vector3.new(B, 8*B, 8*B),
+		cframe = CFrame.new(pos + Vector3.new(0, 6*B, 0)) * CFrame.Angles(0, 0, math.rad(90)),
+		color = Color3.fromRGB(200, 50, 50),
+		shape = Enum.PartType.Cylinder,
+		material = Enum.Material.SmoothPlastic,
+		parent = wheel,
+	})
+
+	-- Colored segment indicators (simple colored parts around the edge)
+	local segColors = { RED, ORANGE, YELLOW, GREEN, CYAN, PURPLE, YELLOW, GREEN }
+	for i, c in segColors do
+		local angle = (i - 1) * (math.pi * 2 / #segColors)
+		local radius = 3.5 * B
+		local sx = math.cos(angle) * radius
+		local sy = math.sin(angle) * radius
+		createPart({
+			name = "Seg_" .. tostring(i),
+			size = Vector3.new(B, B, 0.5),
+			position = pos + Vector3.new(0, 6*B + sy, sx),
+			color = c, material = Enum.Material.Neon,
+			canCollide = false, parent = wheel,
+		})
+	end
+
+	-- Sign
+	local sign = createPart({
+		name = "SpinSign", size = Vector3.new(6*B, 2*B, 0.3),
+		position = pos + Vector3.new(0, 10.5*B, 0),
+		color = SIGN_COLOR, parent = wheel,
+	})
+	addSurfaceText(sign, "DAILY SPIN", ORANGE, 36, Enum.NormalId.Front)
+
+	-- ProximityPrompt
+	addProximityPrompt(wheelPart, "Daily Spin", "Spin!", 10)
+end
+
+--============================================================================
+-- 1.8 Leaderboard Podiums
+--============================================================================
+
+local function buildPodiums(parent: Model)
+	local podiums = Instance.new("Model")
+	podiums.Name = "LeaderboardPodiums"
+	podiums.Parent = parent
+
+	local pos = PODIUM_POS
+
+	-- Two podium groups side by side
+	local groups = {
+		{ name = "XP Champions", xOff = -12*B, color = YELLOW },
+		{ name = "Level Leaders", xOff = 12*B, color = CYAN },
+	}
+
+	for _, group in groups do
+		local gPos = pos + Vector3.new(group.xOff, 0, 0)
+
+		-- 1st place podium (tall, gold)
+		createPart({
+			name = group.name .. "_1st",
+			size = Vector3.new(3*B, 5*B, 3*B),
+			position = gPos + Vector3.new(0, 2.5*B, 0),
+			color = GOLD, material = Enum.Material.SmoothPlastic, parent = podiums,
+		})
+
+		-- 2nd place (left, shorter, silver)
+		createPart({
+			name = group.name .. "_2nd",
+			size = Vector3.new(3*B, 3.5*B, 3*B),
+			position = gPos + Vector3.new(-3.5*B, 1.75*B, 0),
+			color = SILVER, material = Enum.Material.SmoothPlastic, parent = podiums,
+		})
+
+		-- 3rd place (right, shortest, bronze)
+		createPart({
+			name = group.name .. "_3rd",
+			size = Vector3.new(3*B, 2.5*B, 3*B),
+			position = gPos + Vector3.new(3.5*B, 1.25*B, 0),
+			color = BRONZE, material = Enum.Material.SmoothPlastic, parent = podiums,
+		})
+
+		-- Billboard behind podiums (top 10)
+		local board = createPart({
+			name = group.name .. "_Board",
+			size = Vector3.new(12*B, 8*B, 0.5),
+			position = gPos + Vector3.new(0, 6*B, -3*B),
+			color = SIGN_COLOR, parent = podiums,
+		})
+		addSurfaceText(board, group.name .. "\n\n1. ---\n2. ---\n3. ---\n4. ---\n5. ---\n6. ---\n7. ---\n8. ---\n9. ---\n10. ---", group.color, 22, Enum.NormalId.Front)
+
+		-- Group label
+		local label = createPart({
+			name = group.name .. "_Label",
+			size = Vector3.new(12*B, 2*B, 0.3),
+			position = gPos + Vector3.new(0, 10.5*B, -3*B),
+			color = SIGN_COLOR, parent = podiums,
+		})
+		addSurfaceText(label, group.name, group.color, 32, Enum.NormalId.Front)
+	end
+end
+
+--============================================================================
+-- 1.9 Social / Gathering Space
+--============================================================================
+
+local function buildSocialSpace(parent: Model)
+	local social = Instance.new("Model")
+	social.Name = "SocialSpace"
+	social.Parent = parent
+
+	local pos = SOCIAL_POS
+
+	-- Raised platform
+	createPart({
+		name = "SocialPlatform", size = Vector3.new(14*B, 0.5, 10*B),
+		position = pos + Vector3.new(0, 0.25, 0),
+		color = Color3.fromRGB(70, 70, 85), material = Enum.Material.Concrete, parent = social,
+	})
+
+	-- Benches (Seats so players can sit)
+	local benchPositions = {
+		Vector3.new(-4*B, 0, -3*B),
+		Vector3.new(4*B, 0, -3*B),
+		Vector3.new(-4*B, 0, 3*B),
+		Vector3.new(4*B, 0, 3*B),
+	}
+	for i, bPos in benchPositions do
+		local benchPart = createPart({
+			name = "Bench_" .. tostring(i),
+			size = Vector3.new(4*B, B, 1.5*B),
+			position = pos + bPos + Vector3.new(0, B * 0.75, 0),
+			color = Color3.fromRGB(120, 80, 40),
+			material = Enum.Material.Wood,
+			parent = social,
+		})
+		-- Add Seat on top
+		local seat = Instance.new("Seat")
+		seat.Name = "Seat_" .. tostring(i)
+		seat.Size = Vector3.new(4*B, 0.5, 1.5*B)
+		seat.Position = pos + bPos + Vector3.new(0, B * 1.25 + 0.25, 0)
+		seat.Anchored = true
+		seat.Color = Color3.fromRGB(100, 60, 30)
+		seat.Material = Enum.Material.Wood
+		seat.Transparency = 0.1
+		seat.Parent = social
+	end
+
+	-- Small Tetris-themed fountain (center of social area)
+	local fountain = createPart({
+		name = "FountainBase",
+		size = Vector3.new(4*B, B, 4*B),
+		position = pos + Vector3.new(0, 0.75, 0),
+		color = Color3.fromRGB(80, 80, 100),
+		material = Enum.Material.Marble,
+		shape = Enum.PartType.Cylinder,
+		parent = social,
+	})
+	fountain.Size = Vector3.new(B, 4*B, 4*B)
+	fountain.CFrame = CFrame.new(pos + Vector3.new(0, 0.75, 0)) * CFrame.Angles(0, 0, math.rad(90))
+
+	-- Water particle effect
+	local waterTop = createPart({
+		name = "FountainWater",
+		size = Vector3.new(2*B, 0.2, 2*B),
+		position = pos + Vector3.new(0, 1.5, 0),
+		color = CYAN, transparency = 0.5, canCollide = false, parent = social,
+	})
+	local waterEmitter = Instance.new("ParticleEmitter")
+	waterEmitter.Color = ColorSequence.new(CYAN)
+	waterEmitter.Size = NumberSequence.new(0.3, 0)
+	waterEmitter.Lifetime = NumberRange.new(0.5, 1)
+	waterEmitter.Rate = 20
+	waterEmitter.Speed = NumberRange.new(3, 5)
+	waterEmitter.SpreadAngle = Vector2.new(20, 20)
+	waterEmitter.Transparency = NumberSequence.new(0.2, 1)
+	waterEmitter.Parent = waterTop
+end
+
+--============================================================================
+-- 1.10 Ambient Effects (particles, fog, path lights)
+--============================================================================
+
+local function buildAmbientEffects(parent: Model)
+	-- Floating Tetris blocks drifting through the sky (particle emitter high up)
+	local skyEmitter = createPart({
+		name = "SkyParticles",
+		size = Vector3.new(GROUND_RADIUS, 1, GROUND_RADIUS),
+		position = Vector3.new(0, 40 * B, 0),
+		color = Color3.new(1,1,1), transparency = 1, canCollide = false, parent = parent,
+	})
+	local driftEmitter = Instance.new("ParticleEmitter")
+	driftEmitter.Name = "TetrisDrift"
+	driftEmitter.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, CYAN),
+		ColorSequenceKeypoint.new(0.25, YELLOW),
+		ColorSequenceKeypoint.new(0.5, PURPLE),
+		ColorSequenceKeypoint.new(0.75, GREEN),
+		ColorSequenceKeypoint.new(1, ORANGE),
+	})
+	driftEmitter.Size = NumberSequence.new(1, 2)
+	driftEmitter.Lifetime = NumberRange.new(8, 15)
+	driftEmitter.Rate = 5
+	driftEmitter.Speed = NumberRange.new(1, 3)
+	driftEmitter.SpreadAngle = Vector2.new(180, 30)
+	driftEmitter.Transparency = NumberSequence.new(0.4, 0.8)
+	driftEmitter.RotSpeed = NumberRange.new(-30, 30)
+	driftEmitter.Parent = skyEmitter
+
+	-- Path lights (ground-level PointLights along the main path to Tetris portal)
+	for i = 1, 8 do
+		local t = i / 9
+		local lPos = SPAWN_POS:Lerp(TETRIS_PORTAL_POS, t)
+		local lightPart = createPart({
+			name = "PathLight_" .. tostring(i),
+			size = Vector3.new(B * 0.5, B * 0.3, B * 0.5),
+			position = Vector3.new(lPos.X + 2*B, 0.3, lPos.Z),
+			color = CYAN, material = Enum.Material.Neon,
+			canCollide = false, parent = parent,
+		})
+		addPointLight(lightPart, CYAN, 0.4, 10)
+	end
+end
+
+local function setupLighting()
+	-- Configure Lighting for warm atmospheric feel
+	local lighting = game:GetService("Lighting")
+	lighting.Ambient = Color3.fromRGB(50, 45, 55)
+	lighting.OutdoorAmbient = Color3.fromRGB(80, 75, 85)
+	lighting.Brightness = 2
+	lighting.ClockTime = 17 -- Golden hour
+	lighting.GeographicLatitude = 30
+
+	-- Atmosphere
+	local existingAtmo = lighting:FindFirstChildOfClass("Atmosphere")
+	if not existingAtmo then
+		local atmo = Instance.new("Atmosphere")
+		atmo.Density = 0.2
+		atmo.Offset = 0.5
+		atmo.Color = Color3.fromRGB(180, 160, 200)
+		atmo.Decay = Color3.fromRGB(100, 80, 120)
+		atmo.Glare = 0.3
+		atmo.Haze = 1.5
+		atmo.Parent = lighting
+	end
+
+	-- Color correction for warmth
+	local existingCC = lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+	if not existingCC then
+		local cc = Instance.new("ColorCorrectionEffect")
+		cc.TintColor = Color3.fromRGB(255, 245, 230)
+		cc.Brightness = 0.02
+		cc.Contrast = 0.05
+		cc.Saturation = 0.15
+		cc.Parent = lighting
+	end
 end
 
 --============================================================================
 -- Public API
 --============================================================================
 
---- Build the entire lobby and parent it to Workspace.
---- Returns the gate trigger part for touch detection wiring.
+--- Build the entire lobby and parent to Workspace.
+--- Returns the gate trigger Part for GameServer to wire touch detection.
 function LobbyBuilder.init(): Part?
-	-- Clean up existing lobby if present
+	-- Clean up existing lobby
 	local existing = workspace:FindFirstChild("Lobby")
-	if existing then
-		existing:Destroy()
-	end
+	if existing then existing:Destroy() end
 
-	-- Create lobby model
 	local model = Instance.new("Model")
 	model.Name = "Lobby"
 
-	-- Build all components
+	-- Build all sections
 	buildGround(model)
-	local touchPart = buildTetrisGate(model)
-	buildShopArea(model)
-	buildComingSoonSign(model)
-	buildLeaderboardBoards(model)
-	buildSpawnPoint(model)
+	buildInvisibleBarriers(model)
+	buildPaths(model)
+	buildCenterpiece(model)
+	local trigger = buildTetrisPortal(model)
+	buildPipeWorldPortal(model)
+	buildShopBooth(model)
+	buildCodesTerminal(model)
+	buildSpinWheel(model)
+	buildPodiums(model)
+	buildSocialSpace(model)
+	buildAmbientEffects(model)
 
-	-- Parent to workspace
 	model.Parent = workspace
-
-	-- Store references
 	lobbyModel = model
-	gateTouchPart = touchPart
+	gateTouchPart = trigger
 
-	return touchPart
+	-- Setup lighting atmosphere
+	setupLighting()
+
+	-- Start centerpiece spin
+	startCenterpieceSpin()
+
+	return trigger
 end
 
---- Get the gate trigger part (for external wiring if needed).
+--- Get the gate trigger part for external wiring.
 function LobbyBuilder.getGateTrigger(): Part?
 	return gateTouchPart :: Part?
 end
 
 --- Get the lobby spawn position.
 function LobbyBuilder.getSpawnPosition(): Vector3
-	return SPAWN_POSITION
+	return SPAWN_POS
 end
 
---- Update leaderboard display text on the physical boards.
---- Called by GameServer when leaderboard data refreshes.
+--- Update leaderboard podium boards with live data.
 function LobbyBuilder.updateLeaderboards(topXP: {{displayName: string, value: number}}, topLevel: {{displayName: string, value: number}})
-	if not lobbyModel then
-		return
-	end
+	if not lobbyModel then return end
 
-	-- Format XP leaderboard text
-	local xpText = "TOP XP\n"
-	for i = 1, math.min(5, #topXP) do
-		local entry = topXP[i]
-		local name = entry.displayName
-		if #name > 12 then
-			name = string.sub(name, 1, 11) .. ".."
-		end
-		xpText = xpText .. "\n#" .. tostring(i) .. " " .. name .. " - " .. tostring(entry.value)
-	end
-	if #topXP == 0 then
-		xpText = xpText .. "\n\nNo rankings yet!"
-	end
+	local podiums = lobbyModel:FindFirstChild("LeaderboardPodiums")
+	if not podiums then return end
 
-	-- Format Level leaderboard text
-	local levelText = "TOP LEVEL\n"
-	for i = 1, math.min(5, #topLevel) do
-		local entry = topLevel[i]
-		local name = entry.displayName
-		if #name > 12 then
-			name = string.sub(name, 1, 11) .. ".."
-		end
-		levelText = levelText .. "\n#" .. tostring(i) .. " " .. name .. " - Lv" .. tostring(entry.value)
-	end
-	if #topLevel == 0 then
-		levelText = levelText .. "\n\nNo rankings yet!"
-	end
-
-	-- Update the SurfaceGui text on the boards
-	local xpBoard = lobbyModel:FindFirstChild("LeaderboardXP") :: Part?
+	-- Format and update XP board
+	local xpBoard = podiums:FindFirstChild("XP Champions_Board") :: Part?
 	if xpBoard then
+		local text = "XP Champions\n"
+		for i = 1, math.min(10, #topXP) do
+			local e = topXP[i]
+			local n = if #e.displayName > 10 then string.sub(e.displayName, 1, 9) .. ".." else e.displayName
+			text = text .. "\n#" .. tostring(i) .. " " .. n .. " - " .. tostring(e.value)
+		end
+		if #topXP == 0 then text = text .. "\n\nNo rankings yet!" end
 		local gui = xpBoard:FindFirstChild("SignGui") :: SurfaceGui?
 		if gui then
 			local label = gui:FindFirstChild("Text") :: TextLabel?
-			if label then
-				label.Text = xpText
-			end
+			if label then label.Text = text end
 		end
 	end
 
-	local levelBoard = lobbyModel:FindFirstChild("LeaderboardLevel") :: Part?
-	if levelBoard then
-		local gui = levelBoard:FindFirstChild("SignGui") :: SurfaceGui?
+	-- Format and update Level board
+	local lvBoard = podiums:FindFirstChild("Level Leaders_Board") :: Part?
+	if lvBoard then
+		local text = "Level Leaders\n"
+		for i = 1, math.min(10, #topLevel) do
+			local e = topLevel[i]
+			local n = if #e.displayName > 10 then string.sub(e.displayName, 1, 9) .. ".." else e.displayName
+			text = text .. "\n#" .. tostring(i) .. " " .. n .. " - Lv" .. tostring(e.value)
+		end
+		if #topLevel == 0 then text = text .. "\n\nNo rankings yet!" end
+		local gui = lvBoard:FindFirstChild("SignGui") :: SurfaceGui?
+		if gui then
+			local label = gui:FindFirstChild("Text") :: TextLabel?
+			if label then label.Text = text end
+		end
+	end
+end
+
+--- Update the Tetris portal progress display for a specific player's completion.
+--- Called when player enters the lobby.
+function LobbyBuilder.updatePortalProgress(completedLevels: number)
+	if not lobbyModel then return end
+	local portal = lobbyModel:FindFirstChild("TetrisPortal")
+	if not portal then return end
+	local progSign = portal:FindFirstChild("ProgressSign") :: Part?
+	if progSign then
+		local gui = progSign:FindFirstChild("SignGui") :: SurfaceGui?
 		if gui then
 			local label = gui:FindFirstChild("Text") :: TextLabel?
 			if label then
-				label.Text = levelText
+				label.Text = tostring(completedLevels) .. "/10 complete"
 			end
 		end
 	end

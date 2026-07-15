@@ -57,6 +57,9 @@ local XP_COLOR = Color3.fromRGB(255, 255, 100)
 local HINT_COLOR = Color3.fromRGB(200, 200, 220)
 local BG_COLOR = Color3.fromRGB(0, 0, 0)
 local HINT_FADE_DELAY = 8 -- seconds before hint fades out
+local SETTINGS_BG = Color3.fromRGB(20, 20, 30)
+local SETTINGS_ACCENT = Color3.fromRGB(80, 140, 255)
+local SETTINGS_TEXT = Color3.fromRGB(220, 220, 230)
 
 --============================================================================
 -- State
@@ -65,9 +68,17 @@ local HINT_FADE_DELAY = 8 -- seconds before hint fades out
 local screenGui: ScreenGui? = nil
 local xpLabel: TextLabel? = nil
 local hintLabel: TextLabel? = nil
+local settingsButton: TextButton? = nil
+local settingsPanel: Frame? = nil
 local isInitialized: boolean = false
 local isVisible: boolean = false
 local hasShownHint: boolean = false
+local isSettingsOpen: boolean = false
+
+-- Settings values (defaults)
+local musicVolume: number = 50
+local sfxVolume: number = 50
+local screenShakeEnabled: boolean = true
 
 --============================================================================
 -- UI Construction
@@ -137,6 +148,211 @@ local function createHintLabel(parent: ScreenGui): TextLabel
 	corner.Parent = label
 
 	return label
+end
+
+--============================================================================
+-- Settings UI
+--============================================================================
+
+local function createSettingsButton(parent: ScreenGui): TextButton
+	local btn = Instance.new("TextButton")
+	btn.Name = "SettingsButton"
+	btn.Size = UDim2.new(0, 40, 0, 40)
+	btn.Position = UDim2.new(1, -50, 0, 10)
+	btn.BackgroundColor3 = BG_COLOR
+	btn.BackgroundTransparency = 0.4
+	btn.BorderSizePixel = 0
+	btn.TextColor3 = SETTINGS_TEXT
+	btn.TextSize = 24
+	btn.Font = Enum.Font.GothamBold
+	btn.Text = "\xE2\x9A\x99" -- gear icon (⚙)
+	btn.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = btn
+
+	return btn
+end
+
+local function createSlider(parent: Frame, name: string, labelText: string, yPos: number, initial: number, onChange: (number) -> ()): Frame
+	local row = Instance.new("Frame")
+	row.Name = name .. "Row"
+	row.Size = UDim2.new(1, -20, 0, 50)
+	row.Position = UDim2.new(0, 10, 0, yPos)
+	row.BackgroundTransparency = 1
+	row.Parent = parent
+
+	-- Label
+	local lbl = Instance.new("TextLabel")
+	lbl.Name = "Label"
+	lbl.Size = UDim2.new(0.4, 0, 0, 20)
+	lbl.Position = UDim2.new(0, 0, 0, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.TextColor3 = SETTINGS_TEXT
+	lbl.TextSize = 14
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Text = labelText
+	lbl.Parent = row
+
+	-- Value label
+	local valLbl = Instance.new("TextLabel")
+	valLbl.Name = "Value"
+	valLbl.Size = UDim2.new(0, 40, 0, 20)
+	valLbl.Position = UDim2.new(1, -40, 0, 0)
+	valLbl.BackgroundTransparency = 1
+	valLbl.TextColor3 = SETTINGS_ACCENT
+	valLbl.TextSize = 14
+	valLbl.Font = Enum.Font.GothamBold
+	valLbl.Text = tostring(initial) .. "%"
+	valLbl.Parent = row
+
+	-- Slider track
+	local track = Instance.new("Frame")
+	track.Name = "Track"
+	track.Size = UDim2.new(1, 0, 0, 8)
+	track.Position = UDim2.new(0, 0, 0, 28)
+	track.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+	track.BorderSizePixel = 0
+	track.Parent = row
+
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(0, 4)
+	trackCorner.Parent = track
+
+	-- Fill
+	local fill = Instance.new("Frame")
+	fill.Name = "Fill"
+	fill.Size = UDim2.new(initial / 100, 0, 1, 0)
+	fill.BackgroundColor3 = SETTINGS_ACCENT
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 4)
+	fillCorner.Parent = fill
+
+	-- Click detection on track
+	track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+			local val = math.floor(relX * 100)
+			fill.Size = UDim2.new(relX, 0, 1, 0)
+			valLbl.Text = tostring(val) .. "%"
+			onChange(val)
+		end
+	end)
+
+	return row
+end
+
+local function createToggle(parent: Frame, name: string, labelText: string, yPos: number, initial: boolean, onChange: (boolean) -> ()): Frame
+	local row = Instance.new("Frame")
+	row.Name = name .. "Row"
+	row.Size = UDim2.new(1, -20, 0, 36)
+	row.Position = UDim2.new(0, 10, 0, yPos)
+	row.BackgroundTransparency = 1
+	row.Parent = parent
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Name = "Label"
+	lbl.Size = UDim2.new(0.7, 0, 1, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.TextColor3 = SETTINGS_TEXT
+	lbl.TextSize = 14
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Text = labelText
+	lbl.Parent = row
+
+	local toggle = Instance.new("TextButton")
+	toggle.Name = "Toggle"
+	toggle.Size = UDim2.new(0, 50, 0, 26)
+	toggle.Position = UDim2.new(1, -50, 0.5, -13)
+	toggle.BackgroundColor3 = if initial then SETTINGS_ACCENT else Color3.fromRGB(60, 60, 70)
+	toggle.BorderSizePixel = 0
+	toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+	toggle.TextSize = 12
+	toggle.Font = Enum.Font.GothamBold
+	toggle.Text = if initial then "ON" else "OFF"
+	toggle.Parent = row
+
+	local toggleCorner = Instance.new("UICorner")
+	toggleCorner.CornerRadius = UDim.new(0, 6)
+	toggleCorner.Parent = toggle
+
+	local state = initial
+	toggle.MouseButton1Click:Connect(function()
+		state = not state
+		toggle.Text = if state then "ON" else "OFF"
+		toggle.BackgroundColor3 = if state then SETTINGS_ACCENT else Color3.fromRGB(60, 60, 70)
+		onChange(state)
+	end)
+
+	return row
+end
+
+local function createSettingsPanel(parent: ScreenGui): Frame
+	local panel = Instance.new("Frame")
+	panel.Name = "SettingsPanel"
+	panel.Size = UDim2.new(0, 280, 0, 260)
+	panel.Position = UDim2.new(1, -290, 0, 56)
+	panel.BackgroundColor3 = SETTINGS_BG
+	panel.BackgroundTransparency = 0.05
+	panel.BorderSizePixel = 0
+	panel.Visible = false
+	panel.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = panel
+
+	-- Title
+	local title = Instance.new("TextLabel")
+	title.Name = "Title"
+	title.Size = UDim2.new(1, 0, 0, 36)
+	title.BackgroundTransparency = 1
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	title.TextSize = 18
+	title.Font = Enum.Font.GothamBold
+	title.Text = "Settings"
+	title.Parent = panel
+
+	-- Music volume slider
+	createSlider(panel, "Music", "Music Volume", 40, musicVolume, function(val)
+		musicVolume = val
+		-- TODO: wire to SoundManager when settings persistence is added
+	end)
+
+	-- SFX volume slider
+	createSlider(panel, "SFX", "SFX Volume", 100, sfxVolume, function(val)
+		sfxVolume = val
+	end)
+
+	-- Screen shake toggle
+	createToggle(panel, "Shake", "Screen Shake", 165, screenShakeEnabled, function(val)
+		screenShakeEnabled = val
+	end)
+
+	-- Close button
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Name = "CloseBtn"
+	closeBtn.Size = UDim2.new(0, 30, 0, 30)
+	closeBtn.Position = UDim2.new(1, -36, 0, 4)
+	closeBtn.BackgroundTransparency = 1
+	closeBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+	closeBtn.TextSize = 20
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.Text = "X"
+	closeBtn.Parent = panel
+
+	closeBtn.MouseButton1Click:Connect(function()
+		panel.Visible = false
+		isSettingsOpen = false
+	end)
+
+	return panel
 end
 
 --============================================================================
@@ -225,6 +441,18 @@ local function initialize()
 	screenGui = createScreenGui()
 	xpLabel = createXPDisplay(screenGui)
 	hintLabel = createHintLabel(screenGui)
+
+	-- Settings button (always visible in lobby)
+	settingsButton = createSettingsButton(screenGui)
+	settingsPanel = createSettingsPanel(screenGui)
+
+	settingsButton.MouseButton1Click:Connect(function()
+		isSettingsOpen = not isSettingsOpen
+		if settingsPanel then
+			settingsPanel.Visible = isSettingsOpen
+		end
+	end)
+
 	connectRemoteEvents()
 end
 
