@@ -87,8 +87,8 @@ assertEquals(MUSIC_VOLUME, 0.5, "Music volume constant is 0.5")
 print("\n=== SFX Effects List ===")
 
 -- The SoundManager defines SFX_SOUNDS with these required effect keys:
--- death, levelComplete, achievement, purchase
-local SFX_EFFECTS = {"death", "levelComplete", "achievement", "purchase"}
+-- death, levelComplete, achievement, purchase, pipeWhoosh, coinDing, chomp
+local SFX_EFFECTS = {"death", "levelComplete", "achievement", "purchase", "pipeWhoosh", "coinDing", "chomp"}
 
 -- Verify all required effects are defined (using inlined data mirroring module)
 local sfxSounds: {[string]: string} = {
@@ -96,6 +96,9 @@ local sfxSounds: {[string]: string} = {
     levelComplete = "rbxassetid://0",
     achievement = "rbxassetid://0",
     purchase = "rbxassetid://0",
+    pipeWhoosh = "rbxassetid://0",
+    coinDing = "rbxassetid://0",
+    chomp = "rbxassetid://0",
 }
 
 for _, effect in SFX_EFFECTS do
@@ -107,7 +110,7 @@ local sfxCount = 0
 for _ in sfxSounds do
     sfxCount += 1
 end
-assertEquals(sfxCount, 4, "Exactly 4 SFX effects defined")
+assertEquals(sfxCount, 7, "Exactly 7 SFX effects defined")
 
 -- Verify all SFX have non-empty asset IDs
 for effect, assetId in sfxSounds do
@@ -120,14 +123,16 @@ end
 print("\n=== Theme Music Mapping ===")
 
 -- The SoundManager maps pack themes to music tracks.
--- At minimum, "lobby" and "tetris" themes should exist.
+-- "lobby", "tetris", and "pipeworld" themes should exist.
 local themeMusicMap: {[string]: string} = {
     lobby = "rbxassetid://0",
     tetris = "rbxassetid://0",
+    pipeworld = "rbxassetid://0",
 }
 
 assertTrue(themeMusicMap["lobby"] ~= nil, "Lobby theme music is defined")
 assertTrue(themeMusicMap["tetris"] ~= nil, "Tetris theme music is defined")
+assertTrue(themeMusicMap["pipeworld"] ~= nil, "Pipe World theme music is defined")
 
 --============================================================================
 -- Summary

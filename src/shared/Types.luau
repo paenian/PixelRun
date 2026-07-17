@@ -14,6 +14,13 @@ local Types = {}
 -- Type Definitions
 --============================================================================
 
+--- Player settings for audio and effects.
+export type PlayerSettings = {
+    musicVolume: number,           -- 0-100 percentage
+    sfxVolume: number,             -- 0-100 percentage
+    screenShake: boolean,          -- Whether screen shake effects are enabled
+}
+
 --- Player profile persisted via DataStoreService.
 --- Storage Key: "player_" .. tostring(userId)
 export type PlayerProfile = {
@@ -30,6 +37,17 @@ export type PlayerProfile = {
     achievements: {string},        -- List of earned achievement IDs
     highestLevel: number,          -- Overall highest level number (for leaderboard)
     totalBlocksRun: number,        -- Lifetime stat
+    redeemedCodes: {string}?,      -- List of redeemed promotional code strings
+    lastDailySpinDate: number?,    -- os.time() timestamp of last daily spin claim
+    settings: PlayerSettings?,     -- Player audio/effects preferences
+    equippedMascot: string?,       -- ID of currently equipped mascot (nil = none)
+    unlockedMascots: {string}?,    -- List of unlocked mascot IDs
+    comboHighest: number?,         -- Highest combo streak ever achieved
+    loginStreak: number?,          -- Current consecutive daily login streak
+    lastLoginDate: number?,        -- os.time() timestamp of last login day (for streak calc)
+    tutorialCompleted: boolean?,   -- Whether the first-time tutorial has been shown and completed
+    deathCounts: {[string]: number}?,     -- Key "packId_levelNum" → death count per level
+    personalBests: {[string]: number}?,   -- Key "packId_levelNum" → best distance in blocks per level
 }
 
 --- Defines a single obstacle type within a level pack.
@@ -100,6 +118,51 @@ export type PowerUpDefinition = {
     multipliers: {number},         -- Effect multiplier per tier (indexed 1 to maxTier)
 }
 
+--- Combo system state tracking per player.
+--- Tracks consecutive near-miss streaks and the resulting XP multiplier.
+export type ComboState = {
+    streak: number,                -- Current consecutive near-miss count
+    multiplier: number,            -- Current XP multiplier (default 1.0)
+    tierName: string?,             -- Current tier display name (nil if below 5)
+    lastNearMissTime: number,      -- Timestamp of last near-miss (for timeout detection)
+}
+
+--- Mascot unlock condition definition.
+--- conditionType determines which fields are relevant:
+---   "free"            — always unlocked, no additional fields needed
+---   "pack_complete"   — requires packId field (completion of that pack)
+---   "combo_milestone" — requires comboStreak field (reach N combo streak)
+---   "login_streak"    — requires days field (N consecutive daily logins)
+---   "xp_threshold"    — requires xpRequired field (total XP >= N)
+export type MascotUnlockCondition = {
+    conditionType: string,         -- "free" | "pack_complete" | "combo_milestone" | "login_streak" | "xp_threshold"
+    packId: string?,               -- Required for "pack_complete"
+    comboStreak: number?,          -- Required for "combo_milestone"
+    days: number?,                 -- Required for "login_streak"
+    xpRequired: number?,           -- Required for "xp_threshold"
+}
+
+--- Definition of a mascot companion.
+export type MascotDefinition = {
+    id: string,                    -- Unique identifier (e.g., "pixel_pup")
+    name: string,                  -- Display name (e.g., "Pixel Pup")
+    description: string,           -- Unlock description shown in UI
+    unlockCondition: MascotUnlockCondition, -- How this mascot is unlocked
+    color: Color3,                 -- Primary visual color of the mascot
+}
+
+--- Configuration for a game mode (Classic, Time Attack, Sprint).
+export type GameModeConfig = {
+    id: string,                    -- Unique mode identifier (e.g., "classic")
+    name: string,                  -- Display name (e.g., "Classic")
+    description: string,           -- Description shown in mode selection UI
+    hasMorass: boolean,            -- Whether the morass chases the player
+    hasTimer: boolean,             -- Whether a timer is displayed
+    timerDirection: string?,       -- "up" (count up) or "down" (countdown); nil if no timer
+    timerDuration: number?,        -- Duration in seconds for countdown timers; nil if no timer or counting up
+    targetDistance: number?,       -- Target distance in blocks (nil = go as far as possible)
+}
+
 --- A single entry in the leaderboard display.
 export type LeaderboardEntry = {
     userId: number,                -- Roblox user ID
@@ -167,7 +230,28 @@ Types.DEFAULT_PLAYER_PROFILE = {
     achievements = {},
     highestLevel = 0,
     totalBlocksRun = 0,
+    redeemedCodes = {},
+    lastDailySpinDate = nil,
+    equippedMascot = "pixel_pup",
+    unlockedMascots = {"pixel_pup"},
+    comboHighest = 0,
+    loginStreak = 0,
+    lastLoginDate = nil,
+    tutorialCompleted = nil,
+    deathCounts = {},
+    personalBests = {},
 }
+
+--- Default player settings
+Types.DEFAULT_PLAYER_SETTINGS = {
+    musicVolume = 50,
+    sfxVolume = 80,
+    screenShake = true,
+}
+
+--- Combo system constants
+Types.COMBO_NEAR_MISS_DISTANCE = 1    -- Blocks: pass within 1 block of obstacle without hitting
+Types.COMBO_TIMEOUT = 1               -- Seconds: reset if no near-miss for > 1 second
 
 --- Morass spawn offset (blocks behind player start)
 Types.MORASS_SPAWN_OFFSET = 50

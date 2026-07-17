@@ -40,6 +40,7 @@ type MorassState = {
     startZ: number,           -- The player's starting Z position
     conveyorSpeed: number,    -- Blocks per second advance rate
     morassVisual: string,     -- Visual style identifier
+    levelNum: number,         -- Current level number (1-10) for intensity scaling
     active: boolean,          -- Whether the morass is currently advancing
     connection: RBXScriptConnection?, -- Heartbeat connection for updates
 }
@@ -68,6 +69,76 @@ local function applyMorassVisuals(part: Part, morassVisual: string)
 end
 
 --============================================================================
+-- Internal: Particle Intensity Scaling
+--============================================================================
+
+--- Returns particle emitter configuration based on level number.
+--- Levels 1-3: gentle (low rate, muted colors)
+--- Levels 4-6: moderate (standard rate)
+--- Levels 7-10: intense (high rate, brighter colors)
+local function getParticleConfig(levelNum: number): {rate: number, speed: number, color: Color3, lifetime: number}
+    if levelNum <= 3 then
+        -- Gentle: low particle rate, muted purple
+        return {
+            rate = 5,
+            speed = 3,
+            color = Color3.fromRGB(120, 60, 150),
+            lifetime = 2,
+        }
+    elseif levelNum <= 6 then
+        -- Moderate: standard particle rate
+        return {
+            rate = 15,
+            speed = 6,
+            color = Color3.fromRGB(180, 50, 220),
+            lifetime = 1.5,
+        }
+    else
+        -- Intense: high particle rate, vivid colors
+        return {
+            rate = 35,
+            speed = 10,
+            color = Color3.fromRGB(255, 40, 80),
+            lifetime = 1,
+        }
+    end
+end
+
+--- Attach a ParticleEmitter to the morass part with intensity scaled by level.
+local function applyMorassParticles(part: Part, levelNum: number)
+    -- Remove any existing particle emitter
+    local existing = part:FindFirstChildOfClass("ParticleEmitter")
+    if existing then
+        existing:Destroy()
+    end
+
+    local config = getParticleConfig(levelNum)
+
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Name = "MorassParticles"
+    emitter.Rate = config.rate
+    emitter.Speed = NumberRange.new(config.speed * 0.5, config.speed)
+    emitter.Lifetime = NumberRange.new(config.lifetime * 0.5, config.lifetime)
+    emitter.SpreadAngle = Vector2.new(30, 30)
+    emitter.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, config.color),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 0, 30)),
+    })
+    emitter.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.8),
+        NumberSequenceKeypoint.new(1, 0.1),
+    })
+    emitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.2),
+        NumberSequenceKeypoint.new(0.7, 0.5),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    emitter.RotSpeed = NumberRange.new(-90, 90)
+    emitter.LightEmission = if levelNum >= 7 then 0.4 else 0.1
+    emitter.Parent = part
+end
+
+--============================================================================
 -- Public: init
 --============================================================================
 
@@ -77,9 +148,12 @@ end
 --- @param player Player -- The player to create morass for
 --- @param layout Types.LevelLayout -- The generated level layout with conveyorSpeed and morassVisual
 --- @param startZ number -- The player's starting Z position (typically 0)
-function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: number)
+--- @param levelNum number? -- The level number (1-10) for visual intensity scaling (defaults to 1)
+function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: number, levelNum: number?)
     -- Clean up any existing morass for this player
     MorassManager.cleanup(player)
+
+    local currentLevel = levelNum or 1
 
     -- Spawn offset is in blocks, convert to studs
     local spawnZ = startZ - (MORASS_SPAWN_OFFSET * BLOCK_SCALE)
@@ -94,9 +168,13 @@ function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: n
     part.CastShadow = false
     part:SetAttribute("IsMorass", true)
     part:SetAttribute("OwnerId", player.UserId)
+    part:SetAttribute("LevelNum", currentLevel)
 
     -- Apply theme visuals
     applyMorassVisuals(part, layout.morassVisual)
+
+    -- Apply level-scaled particle effects
+    applyMorassParticles(part, currentLevel)
 
     -- Parent to workspace
     part.Parent = workspace
@@ -108,6 +186,7 @@ function MorassManager.init(player: Player, layout: Types.LevelLayout, startZ: n
         startZ = startZ,
         conveyorSpeed = layout.conveyorSpeed * BLOCK_SCALE,
         morassVisual = layout.morassVisual,
+        levelNum = currentLevel,
         active = false,
         connection = nil,
     }
@@ -291,6 +370,24 @@ function MorassManager.isActive(player: Player): boolean
     end
 
     return state.active
+end
+
+--============================================================================
+-- Public: getLevelNum
+--============================================================================
+
+--- Return the level number associated with a player's morass instance.
+--- Used for client-side intensity effects (proximity warning).
+---
+--- @param player Player -- The player to query
+--- @return number -- Level number (1-10), or 1 if no morass exists
+function MorassManager.getLevelNum(player: Player): number
+    local state = playerMorass[player.UserId]
+    if not state then
+        return 1
+    end
+
+    return state.levelNum
 end
 
 --============================================================================

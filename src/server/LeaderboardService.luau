@@ -26,6 +26,10 @@ local RETRY_INTERVAL = 10 -- Seconds between retries on failure
 local CACHE_DURATION = 10 -- Seconds to cache leaderboard results
 local MAX_ENTRIES = 100 -- Maximum top entries to return
 
+-- Time Attack inversion constant: OrderedDataStore only sorts ascending,
+-- so we store (MAX_TIME - actual_time) to rank lowest times first.
+local MAX_TIME = 999999 -- Maximum time value for inversion (seconds)
+
 --============================================================================
 -- State
 --============================================================================
@@ -47,6 +51,16 @@ local lastLevelFetchTime: number = 0
 -- Availability tracking for graceful failure display
 local xpBoardAvailable: boolean = true
 local levelBoardAvailable: boolean = true
+
+-- Mode-specific leaderboard state
+-- Cached OrderedDataStore references keyed by "Leaderboard_{modeId}_{packId}"
+local modeDataStores: { [string]: OrderedDataStore } = {}
+
+-- Pending mode score updates: key -> { userId -> score }
+local pendingModeUpdates: { [string]: { [number]: number } } = {}
+
+-- Cached mode leaderboard results: key -> { entries, fetchTime }
+local cachedModeBoards: { [string]: { entries: { Types.LeaderboardEntry }, fetchTime: number } } = {}
 
 -- Whether the update loop is running
 local updateLoopRunning: boolean = false
@@ -99,6 +113,22 @@ local function getDisplayName(userId: number): string
 	return "Player_" .. tostring(userId)
 end
 
+--- Get or create a mode-specific OrderedDataStore by key.
+local function getModeDataStore(key: string): OrderedDataStore?
+	if modeDataStores[key] then
+		return modeDataStores[key]
+	end
+	local success, store = pcall(function()
+		return DataStoreService:GetOrderedDataStore(key)
+	end)
+	if success then
+		modeDataStores[key] = store
+		return store
+	end
+	warn("[LeaderboardService] Failed to get mode OrderedDataStore '" .. key .. "': " .. tostring(store))
+	return nil
+end
+
 --- Flush pending XP updates to the OrderedDataStore.
 local function flushXPUpdates()
 	local store = getXPDataStore()
@@ -137,6 +167,36 @@ local function flushLevelUpdates()
 		else
 			warn("[LeaderboardService] Failed to update Level for userId " .. tostring(userId) .. ": " .. tostring(err))
 			levelBoardAvailable = false
+		end
+	end
+end
+
+--- Flush pending mode-specific score updates to their respective OrderedDataStores.
+local function flushModeUpdates()
+	for key, updates in pairs(pendingModeUpdates) do
+		if not next(updates) then
+			continue
+		end
+
+		local store = getModeDataStore(key)
+		if not store then
+			continue
+		end
+
+		for userId, score in pairs(updates) do
+			local success, err = pcall(function()
+				store:SetAsync(tostring(userId), score)
+			end)
+			if success then
+				updates[userId] = nil
+			else
+				warn("[LeaderboardService] Failed to update mode score for key '" .. key .. "' userId " .. tostring(userId) .. ": " .. tostring(err))
+			end
+		end
+
+		-- Remove the key entry if all updates were flushed
+		if not next(updates) then
+			pendingModeUpdates[key] = nil
 		end
 	end
 end
@@ -197,6 +257,10 @@ local function startUpdateLoop()
 			if next(pendingLevelUpdates) then
 				flushLevelUpdates()
 			end
+			-- Flush mode-specific score updates
+			if next(pendingModeUpdates) then
+				flushModeUpdates()
+			end
 
 			-- If boards became unavailable, retry after RETRY_INTERVAL
 			if not xpBoardAvailable then
@@ -243,6 +307,9 @@ export type LeaderboardService = {
 	getTopXP: (count: number) -> { Types.LeaderboardEntry },
 	getTopLevel: (count: number) -> { Types.LeaderboardEntry },
 	getPlayerRank: (userId: number, board: string) -> (number?, number?),
+	getLeaderboardKey: (modeId: string, packId: string) -> string,
+	updateModeScore: (userId: number, modeId: string, packId: string, score: number) -> (),
+	getModeTop: (modeId: string, packId: string, count: number) -> { Types.LeaderboardEntry },
 }
 
 --- Queue an XP score update for the given player.
@@ -402,6 +469,99 @@ function LeaderboardService.getPlayerRank(userId: number, board: string): (numbe
 
 	-- Fallback: return just the value without rank
 	return nil, playerValue
+end
+
+--============================================================================
+-- Mode-Specific Leaderboard API
+--============================================================================
+
+--- Returns the OrderedDataStore key for a mode-specific leaderboard.
+--- Format: "Leaderboard_{modeId}_{packId}"
+--- @param modeId string -- The game mode id (e.g., "time_attack", "sprint")
+--- @param packId string -- The pack id (e.g., "tetris", "pipeworld")
+--- @return string -- The formatted key
+function LeaderboardService.getLeaderboardKey(modeId: string, packId: string): string
+	return "Leaderboard_" .. modeId .. "_" .. packId
+end
+
+--- Queue a mode-specific score update for the given player.
+--- For Time Attack: score should be time in seconds (lower = better).
+---   The value is inverted (MAX_TIME - score) for ascending-sort OrderedDataStore.
+--- For Sprint: score should be distance in blocks (higher = better). Stored directly.
+---
+--- @param userId number -- Player's Roblox user ID
+--- @param modeId string -- The game mode id (e.g., "time_attack", "sprint")
+--- @param packId string -- The pack id (e.g., "tetris", "pipeworld")
+--- @param score number -- The raw score to store
+function LeaderboardService.updateModeScore(userId: number, modeId: string, packId: string, score: number): ()
+	local key = LeaderboardService.getLeaderboardKey(modeId, packId)
+
+	-- Invert score for Time Attack (lower time = higher stored value = better rank)
+	local storedValue: number
+	if modeId == "time_attack" then
+		storedValue = MAX_TIME - math.floor(score)
+	else
+		-- Sprint and any other modes: higher score = better, store directly
+		storedValue = math.floor(score)
+	end
+
+	-- Queue the update
+	if not pendingModeUpdates[key] then
+		pendingModeUpdates[key] = {}
+	end
+	pendingModeUpdates[key][userId] = storedValue
+	startUpdateLoop()
+end
+
+--- Get the top entries for a mode-specific leaderboard.
+--- Returns entries with the raw score (un-inverted for Time Attack).
+---
+--- @param modeId string -- The game mode id
+--- @param packId string -- The pack id
+--- @param count number -- Number of top entries to fetch
+--- @return {LeaderboardEntry} -- Array of leaderboard entries (value = actual score)
+function LeaderboardService.getModeTop(modeId: string, packId: string, count: number): { Types.LeaderboardEntry }
+	local key = LeaderboardService.getLeaderboardKey(modeId, packId)
+	local clampedCount = math.min(count, MAX_ENTRIES)
+	local now = tick()
+
+	-- Check cache
+	local cached = cachedModeBoards[key]
+	if cached and (now - cached.fetchTime) < CACHE_DURATION and #cached.entries > 0 then
+		if clampedCount >= #cached.entries then
+			return cached.entries
+		end
+		local subset: { Types.LeaderboardEntry } = {}
+		for i = 1, clampedCount do
+			table.insert(subset, cached.entries[i])
+		end
+		return subset
+	end
+
+	-- Fetch from DataStore (descending = highest stored value first)
+	local store = getModeDataStore(key)
+	local rawEntries = fetchTopEntries(store, clampedCount)
+
+	-- Un-invert scores for Time Attack mode
+	local entries: { Types.LeaderboardEntry } = {}
+	for _, entry in rawEntries do
+		local displayValue = entry.value
+		if modeId == "time_attack" then
+			displayValue = MAX_TIME - entry.value
+		end
+		table.insert(entries, {
+			userId = entry.userId,
+			displayName = entry.displayName,
+			value = displayValue,
+		})
+	end
+
+	-- Cache the result
+	if #entries > 0 then
+		cachedModeBoards[key] = { entries = entries, fetchTime = now }
+	end
+
+	return entries
 end
 
 return LeaderboardService

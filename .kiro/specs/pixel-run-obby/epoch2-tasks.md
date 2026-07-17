@@ -27,9 +27,9 @@ Popular Roblox games (DOORS, Blair, Epic Minigames, Horrific Housing, Pet Simula
 
 ## Tasks
 
-- [ ] 1. LOBBY REDESIGN
+- [x] 1. LOBBY REDESIGN
 
-  - [ ] 1.1 Redesign lobby layout and geometry
+  - [x] 1.1 Redesign lobby layout and geometry
     - Replace box-with-walls with open spawn island (200x200 studs)
     - Terrain-like materials (Grass edges, smooth stone center, brick paths)
     - Invisible barriers + kill plane (no visible walls)
@@ -38,13 +38,13 @@ Popular Roblox games (DOORS, Blair, Epic Minigames, Horrific Housing, Pet Simula
     - Colored brick paths radiating from spawn to each zone
     - Ambient floating Tetris block particles drifting through the air
 
-  - [ ] 1.2 Build themed centerpiece
+  - [x] 1.2 Build themed centerpiece
     - Large spinning Tetris piece sculpture above spawn (slow rotation via server Tween)
     - Built from colored blocks in Tetris theme colors
     - Neon glow on edges, serves as orientation landmark
     - Visible from anywhere in the lobby
 
-  - [ ] 1.3 Rebuild Tetris portal as proper gateway
+  - [x] 1.3 Rebuild Tetris portal as proper gateway
     - Larger archway (7 wide × 7 tall, 2 blocks deep frame)
     - Swirling colored particle effects inside the opening
     - Floor path leading to portal (colored trail on ground)
@@ -52,14 +52,14 @@ Popular Roblox games (DOORS, Blair, Epic Minigames, Horrific Housing, Pet Simula
     - Pulsing glow effect on arch frame (PointLight cycling intensity)
     - Keep invisible touch trigger for walk-through activation
 
-  - [ ] 1.4 Build Pipe World preview portal (locked)
+  - [x] 1.4 Build Pipe World preview portal (locked)
     - Same portal frame style but green pipe / brick materials
     - Translucent barrier across opening (green-tinted, Transparency 0.5)
     - "COMING SOON" floating text above
     - Lock icon part on the barrier
     - No touch trigger (blocked)
 
-  - [ ] 1.5 Build Shop NPC booth
+  - [x] 1.5 Build Shop NPC booth
     - Physical counter/booth structure with NPC character behind it
     - ProximityPrompt: "Press E to open Shop"
     - Opens ScreenGui shop panel showing power-up tiers, costs, current tier, Buy buttons
@@ -67,14 +67,14 @@ Popular Roblox games (DOORS, Blair, Epic Minigames, Horrific Housing, Pet Simula
     - "UPGRADES" sign above booth with XP icon
     - NPC: simple blocky merchant character (Parts + Humanoid, no animations needed)
 
-  - [ ] 1.6 Build Codes terminal
+  - [x] 1.6 Build Codes terminal
     - Physical arcade-machine-style object near spawn
     - ProximityPrompt: "Press E to enter Code"
     - Opens TextBox GUI for code entry
     - Server validates code, awards reward, shows success/error
     - Create `src/server/CodesManager.luau`
 
-  - [ ] 1.7 Build Daily Spin wheel
+  - [x] 1.7 Build Daily Spin wheel
     - Physical spinning wheel prop (cylinder with colored segments)
     - ProximityPrompt: "Press E to Spin" (only if unclaimed today)
     - Spin animation (TweenService rotation) landing on reward segment
@@ -82,194 +82,194 @@ Popular Roblox games (DOORS, Blair, Epic Minigames, Horrific Housing, Pet Simula
     - "Come back tomorrow!" text when already claimed
     - Wire into RewardsManager
 
-  - [ ] 1.8 Rebuild leaderboard displays as podiums
+  - [x] 1.8 Rebuild leaderboard displays as podiums
     - Top 3 players on physical podium blocks (gold/silver/bronze)
     - Display names via BillboardGui above each podium
     - Full top-10 on billboard behind podiums
     - Two podium sets: "XP Champions" and "Level Leaders"
     - Position behind spawn (players face portals, podiums at back)
 
-  - [ ] 1.9 Add social/gathering space
+  - [x] 1.9 Add social/gathering space
     - Open area between spawn and portals
     - Benches (Seat instances for sitting)
     - Low decorative hedges/walls dividing zones (not blocking movement)
     - Small Tetris-themed fountain or water feature
     - Room for 10+ players without crowding
 
-  - [ ] 1.10 Add lobby ambient effects
+  - [x] 1.10 Add lobby ambient effects
     - Lobby background music (chill chiptune/retro, separate track)
     - Floating Tetris piece particles drifting across sky
     - Atmospheric fog (Atmosphere instance, light density)
     - Colored PointLights along paths (in the floor)
     - Fixed warm lighting or slow time-of-day cycle
 
-  - [ ] 1.11 Add Settings button (HUD)
+  - [x] 1.11 Add Settings button (HUD)
     - Gear icon top-right corner (always visible)
     - Opens Settings panel: music volume, SFX volume, screen shake toggle
     - Persist settings in player profile via DataStore
     - Wire SoundManager to respect volume settings
 
-- [ ] 2. CODES SYSTEM (CodesManager)
+- [x] 2. CODES SYSTEM (CodesManager)
 
-  - [ ] 2.1 Create CodesManager module
+  - [x] 2.1 Create CodesManager module
     - `src/server/CodesManager.luau`
     - Code definition: { code, reward: {type: "xp"|"mascot", amount?, mascotId?}, maxRedemptions?, expiresAt? }
     - Functions: redeemCode, hasRedeemed, addCode, getActiveCodes
     - Per-player redemption tracking (add `redeemedCodes: {string}` to PlayerProfile)
     - Validates: exists, not expired, not already redeemed, not over max redemptions
 
-  - [ ] 2.2 Wire codes terminal to GameServer
+  - [x] 2.2 Wire codes terminal to GameServer
     - Add RemoteFunction: RedeemCode
     - Server: rate limit, validate via CodesManager, award, persist
     - Client: success → particle burst + floating reward text; failure → error in GUI
 
-  - [ ] 2.3 Seed initial codes
+  - [x] 2.3 Seed initial codes
     - "PIXELRUN" → 500 XP (launch code, no expiry)
     - "TETRIS" → 1000 XP (first-week code, 7 day expiry)
     - "FOUNDER" → 2000 XP (limited to first 100 redemptions)
 
-  - [ ] 2.4 Write property tests for CodesManager
+  - [x] 2.4 Write property tests for CodesManager
     - Valid code + first redemption → success + XP awarded
     - Same code + same player again → rejected, unchanged
     - Expired code → rejected
     - Max redemptions reached → rejected
     - Invalid code string → rejected
 
-- [ ] 3. DAILY SPIN (RewardsManager)
+- [x] 3. DAILY SPIN (RewardsManager)
 
-  - [ ] 3.1 Implement RewardsManager module
+  - [x] 3.1 Implement RewardsManager module
     - Replace stub in `src/shared/RewardsManager.luau`
     - Functions: canSpinToday, determineReward, applyReward, getLastSpinDate
     - Reward segments: 100 XP ×3, 200 XP ×2, 500 XP ×2, 1000 XP ×1, 2000 XP ×1, "Bonus Spin" ×1
     - Add `lastDailySpinDate: number` to PlayerProfile
     - Server-authoritative timing (os.time day comparison)
 
-  - [ ] 3.2 Wire spin to GameServer
+  - [x] 3.2 Wire spin to GameServer
     - Add RemoteFunction: ClaimDailySpin
     - Server validates, generates reward, returns { success, reward, segmentIndex }
     - Client plays wheel animation to correct segment, shows reward
 
-  - [ ] 3.3 Write property tests
+  - [x] 3.3 Write property tests
     - Cannot spin twice same day
     - All rewards > 0
     - canSpinToday true if last spin was yesterday or earlier
     - canSpinToday false if last spin was today
 
-- [ ] 4. COMBO SYSTEM (ComboManager)
+- [x] 4. COMBO SYSTEM (ComboManager)
 
-  - [ ] 4.1 Design combo rules and data model
+  - [x] 4.1 Design combo rules and data model
     - Triggers: consecutive near-misses (pass within 1 block of obstacle without hitting)
     - Tiers: 5x="Nice!" (1.5x XP), 10x="Great!" (2x), 20x="Amazing!" (3x), 50x="Unstoppable!" (5x)
     - Resets on: hit obstacle, caught by morass, stop moving >1 second
     - Add ComboState type to Types.luau
 
-  - [ ] 4.2 Implement ComboManager module
+  - [x] 4.2 Implement ComboManager module
     - Replace stub in `src/shared/ComboManager.luau`
     - Functions: startCombo, incrementCombo, resetCombo, getCurrentMultiplier, getComboTier
     - Server-authoritative combo tracking per player
 
-  - [ ] 4.3 Wire combo into gameplay
+  - [x] 4.3 Wire combo into gameplay
     - Server: detect near-miss events, increment combo, reset on collision
     - Server: apply combo multiplier to per-block XP
     - Client: combo counter + tier name on HUD
     - Client: screen flash + floating text on tier-up
 
-  - [ ] 4.4 Write property tests
+  - [x] 4.4 Write property tests
     - Multiplier increases monotonically with streak
     - Reset → streak=0, multiplier=1.0
     - Tier boundaries: 5, 10, 20, 50
 
-- [ ] 5. SECOND LEVEL PACK (Pipe World)
+- [x] 5. SECOND LEVEL PACK (Pipe World)
 
-  - [ ] 5.1 Create PipeWorldPack.luau
+  - [x] 5.1 Create PipeWorldPack.luau
     - `src/shared/LevelPacks/PipeWorldPack.luau`
     - displayOrder=2, prerequisitePack="tetris", themeId="pipeworld"
     - 5 obstacle types: brick blocks, warp pipes, coin blocks, crumble bricks, pipe plants (touch-kill)
     - 10 levels, slightly denser than Tetris at equivalent levels
     - Achievement: "Pipeline Pro", morassVisual: "sewer_flood"
 
-  - [ ] 5.2 Add Pipe World music and SFX
+  - [x] 5.2 Add Pipe World music and SFX
     - Music asset ID in SoundManager THEME_MUSIC table
     - SFX: pipe whoosh, coin ding, chomp sound
 
-  - [ ] 5.3 Write unit tests
+  - [x] 5.3 Write unit tests
     - Schema validation passes
     - Correct prerequisite and displayOrder
     - Touch-kill only on level 10
     - All 5 obstacle types with correct colors and orientations
 
-- [ ] 6. MASCOT COMPANIONS (MascotManager)
+- [x] 6. MASCOT COMPANIONS (MascotManager)
 
-  - [ ] 6.1 Design mascots and unlock conditions
+  - [x] 6.1 Design mascots and unlock conditions
     - 6 mascots: Pixel Pup (free), Cube Cat (complete Tetris), Pipe Frog (complete Pipe World), Flame Fox (50-combo), Shadow Owl (7-day login streak), Golden Dragon (100k XP)
     - Add to PlayerProfile: equippedMascot, unlockedMascots
 
-  - [ ] 6.2 Implement MascotManager module
+  - [x] 6.2 Implement MascotManager module
     - Replace stub, functions: getMascotDefinitions, isUnlocked, unlock, equip, getEquipped, checkUnlockConditions
     - Server-authoritative unlock validation
 
-  - [ ] 6.3 Implement mascot visual (client follower)
+  - [x] 6.3 Implement mascot visual (client follower)
     - Small floating Part-based model following player
     - Sine-wave bob, trails behind, colored particle trail
 
-  - [ ] 6.4 Mascot selection UI
+  - [x] 6.4 Mascot selection UI
     - Display case in lobby with ProximityPrompt
     - Collection panel: all mascots, locked/unlocked/equipped states
     - Equip button for unlocked ones
 
-  - [ ] 6.5 Wire unlock triggers
+  - [x] 6.5 Wire unlock triggers
     - Pack complete → pack-specific mascot
     - Combo milestone → Flame Fox
     - XP threshold → Golden Dragon
     - Login streak → Shadow Owl
     - Fire MascotUnlocked event with effects
 
-  - [ ] 6.6 Write property tests
+  - [x] 6.6 Write property tests
     - Default mascot always unlocked
     - Can't equip locked mascot
     - Unlock conditions evaluate correctly
     - Persists in serialization round-trip
 
-- [ ] 7. GAME MODES (GameModeManager)
+- [x] 7. GAME MODES (GameModeManager)
 
-  - [ ] 7.1 Implement GameModeManager
+  - [x] 7.1 Implement GameModeManager
     - Replace stub, modes: Classic (existing), Time Attack (no morass, timer up), Sprint (60s, max distance)
     - Functions: getAvailableModes, getModeConfig, isModeUnlocked, startMode
 
-  - [ ] 7.2 Mode-specific LevelGenerator behavior
+  - [x] 7.2 Mode-specific LevelGenerator behavior
     - Time Attack: no morass, slower conveyor
     - Sprint: very slow morass, 60s HUD timer
 
-  - [ ] 7.3 Mode selection on portal interaction
+  - [x] 7.3 Mode selection on portal interaction
     - Completed packs show mode choice via ProximityPrompt menu
     - Default to Classic for uncompleted packs
 
-  - [ ] 7.4 Mode-specific leaderboards
+  - [x] 7.4 Mode-specific leaderboards
     - Separate OrderedDataStore keys: "Leaderboard_{mode}_{packId}"
     - Time Attack: lowest time wins; Sprint: highest distance wins
 
-  - [ ] 7.5 Write property tests
+  - [x] 7.5 Write property tests
     - Classic always available
     - Other modes require pack completion in Classic
     - Leaderboard keys unique per mode+pack combo
 
-- [ ] 8. QUALITY OF LIFE
+- [x] 8. QUALITY OF LIFE
 
-  - [ ] 8.1 First-time tutorial
+  - [x] 8.1 First-time tutorial
     - Detect new player (0 XP, no completions)
     - 3 brief tip overlays: jump, morass, XP
     - Dismiss on tap, persist tutorialCompleted flag, never show again
 
-  - [ ] 8.2 "Return to Lobby" button
+  - [x] 8.2 "Return to Lobby" button
     - Small "Leave" button on gameplay HUD
     - Confirm dialog: "Return to lobby? XP earned will be kept."
     - Fires LevelChoice("lobby")
 
-  - [ ] 8.3 Death counter and personal best
+  - [x] 8.3 Death counter and personal best
     - Track deaths per level, best distance per level (persisted)
     - Show on level start: "Attempt #47" / "PB: 423 blocks"
 
-  - [ ] 8.4 Morass visual intensity scaling
+  - [x] 8.4 Morass visual intensity scaling
     - Levels 1-3: gentle, slow advance visual
     - Levels 7-10: more particles, screen-edge warning glow within 20 blocks, subtle camera shake
 

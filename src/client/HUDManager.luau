@@ -89,6 +89,19 @@ local achievementScrollFrame: ScrollingFrame? = nil
 local isAchievementPanelOpen: boolean = false
 local earnedAchievements: { [string]: boolean } = {}
 
+-- Combo display state
+local comboFrame: Frame? = nil
+local comboStreakLabel: TextLabel? = nil
+local comboTierLabel: TextLabel? = nil
+local comboLastTierName: string? = nil
+
+-- Leave button + confirm dialog state
+local leaveButton: TextButton? = nil
+local leaveConfirmFrame: Frame? = nil
+
+-- Attempt/PB display state
+local attemptPBLabel: TextLabel? = nil
+
 -- Leaderboard state
 local leaderboardToggleButton: TextButton? = nil
 local leaderboardPanel: Frame? = nil
@@ -111,6 +124,8 @@ local toggleAchievementPanel: () -> ()
 local refreshAchievementList: () -> ()
 local toggleLeaderboardPanel: () -> ()
 local refreshLeaderboardData: () -> ()
+local showLeaveConfirmDialog: () -> ()
+local hideLeaveConfirmDialog: () -> ()
 
 --============================================================================
 -- UI Construction
@@ -316,7 +331,7 @@ local function createAchievementToggleButton(parent: ScreenGui): TextButton
 	local button = Instance.new("TextButton")
 	button.Name = "AchievementToggle"
 	button.Size = UDim2.new(0, 140, 0, 36)
-	button.Position = UDim2.new(1, -150, 0, 10)
+	button.Position = UDim2.new(1, -196, 0, 10)
 	button.BackgroundColor3 = Color3.fromRGB(50, 40, 80)
 	button.BackgroundTransparency = 0.3
 	button.BorderSizePixel = 0
@@ -389,12 +404,55 @@ local function createAchievementPanel(parent: ScreenGui): (Frame, ScrollingFrame
 	return panel, scrollFrame
 end
 
+--- Create the combo display frame (bottom-center, shows streak counter and tier name).
+local function createComboDisplay(parent: ScreenGui): (Frame, TextLabel, TextLabel)
+	local frame = Instance.new("Frame")
+	frame.Name = "ComboDisplay"
+	frame.Size = UDim2.new(0, 200, 0, 60)
+	frame.Position = UDim2.new(0.5, -100, 1, -100)
+	frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	frame.BackgroundTransparency = 0.6
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = frame
+
+	-- Combo streak counter (e.g., "5x COMBO")
+	local streakLabel = Instance.new("TextLabel")
+	streakLabel.Name = "ComboStreak"
+	streakLabel.Size = UDim2.new(1, 0, 0, 30)
+	streakLabel.Position = UDim2.new(0, 0, 0, 4)
+	streakLabel.BackgroundTransparency = 1
+	streakLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
+	streakLabel.TextSize = 22
+	streakLabel.Font = Enum.Font.GothamBold
+	streakLabel.Text = ""
+	streakLabel.Parent = frame
+
+	-- Tier name (e.g., "Nice!", "Great!")
+	local tierLabel = Instance.new("TextLabel")
+	tierLabel.Name = "ComboTier"
+	tierLabel.Size = UDim2.new(1, 0, 0, 22)
+	tierLabel.Position = UDim2.new(0, 0, 0, 34)
+	tierLabel.BackgroundTransparency = 1
+	tierLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
+	tierLabel.TextSize = 16
+	tierLabel.Font = Enum.Font.GothamBold
+	tierLabel.Text = ""
+	tierLabel.Parent = frame
+
+	return frame, streakLabel, tierLabel
+end
+
 --- Create the leaderboard toggle button (top-right, below achievement button).
 local function createLeaderboardToggleButton(parent: ScreenGui): TextButton
 	local button = Instance.new("TextButton")
 	button.Name = "LeaderboardToggle"
 	button.Size = UDim2.new(0, 140, 0, 36)
-	button.Position = UDim2.new(1, -150, 0, 52)
+	button.Position = UDim2.new(1, -196, 0, 52)
 	button.BackgroundColor3 = Color3.fromRGB(30, 50, 80)
 	button.BackgroundTransparency = 0.3
 	button.BorderSizePixel = 0
@@ -537,6 +595,207 @@ local function createLeaderboardPanel(parent: ScreenGui): (Frame, ScrollingFrame
 	end)
 
 	return panel, scrollFrame, playerRankLabel, xpTab, levelTab
+end
+
+--============================================================================
+-- Attempt / Personal Best Display
+--============================================================================
+
+--- Create the attempt/PB text label (top-center, hidden by default).
+--- Displays "Attempt #N | PB: X blocks" briefly on level start.
+local function createAttemptPBDisplay(parent: ScreenGui): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Name = "AttemptPBDisplay"
+	label.Size = UDim2.new(0, 320, 0, 32)
+	label.Position = UDim2.new(0.5, -160, 0, 44)
+	label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	label.BackgroundTransparency = 0.6
+	label.BorderSizePixel = 0
+	label.TextColor3 = Color3.fromRGB(220, 220, 255)
+	label.TextSize = 15
+	label.Font = Enum.Font.GothamBold
+	label.Text = ""
+	label.TextTransparency = 1
+	label.BackgroundTransparency = 1
+	label.Visible = false
+	label.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = label
+
+	return label
+end
+
+--- Show the attempt count and personal best briefly, then fade out after 3 seconds.
+--- @param attemptCount number - The current attempt number for this level
+--- @param personalBest number - The player's best distance in blocks for this level
+local function showAttemptPB(attemptCount: number, personalBest: number)
+	if not attemptPBLabel then
+		return
+	end
+
+	-- Build display text
+	local text = "Attempt #" .. tostring(attemptCount)
+	if personalBest > 0 then
+		text = text .. "  |  PB: " .. tostring(personalBest) .. " blocks"
+	end
+
+	attemptPBLabel.Text = text
+	attemptPBLabel.Visible = true
+	attemptPBLabel.TextTransparency = 0
+	attemptPBLabel.BackgroundTransparency = 0.6
+
+	-- Fade out after 3 seconds
+	task.delay(3, function()
+		if attemptPBLabel then
+			local fadeInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+			local fadeTween = TweenService:Create(attemptPBLabel, fadeInfo, {
+				TextTransparency = 1,
+				BackgroundTransparency = 1,
+			})
+			fadeTween:Play()
+			fadeTween.Completed:Connect(function()
+				if attemptPBLabel then
+					attemptPBLabel.Visible = false
+				end
+			end)
+		end
+	end)
+end
+
+--============================================================================
+-- Leave Button & Confirm Dialog
+--============================================================================
+
+--- Create a small "Leave" button (bottom-left, semi-transparent).
+--- Visible during active gameplay. Pressing it opens the confirm dialog.
+local function createLeaveButton(parent: ScreenGui): TextButton
+	local button = Instance.new("TextButton")
+	button.Name = "LeaveButton"
+	button.Size = UDim2.new(0, 80, 0, 30)
+	button.Position = UDim2.new(0, 10, 1, -44)
+	button.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
+	button.BackgroundTransparency = 0.5
+	button.BorderSizePixel = 0
+	button.TextColor3 = Color3.fromRGB(255, 200, 200)
+	button.TextSize = 13
+	button.Font = Enum.Font.GothamBold
+	button.Text = "Leave"
+	button.Visible = false -- shown when gameplay HUD is active
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		showLeaveConfirmDialog()
+	end)
+
+	return button
+end
+
+--- Create a confirmation dialog for returning to lobby.
+--- "Return to lobby? XP earned will be kept."
+local function createLeaveConfirmDialog(parent: ScreenGui): Frame
+	local frame = Instance.new("Frame")
+	frame.Name = "LeaveConfirmDialog"
+	frame.Size = UDim2.new(0, 300, 0, 140)
+	frame.Position = UDim2.new(0.5, -150, 0.5, -70)
+	frame.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
+	frame.BackgroundTransparency = 0.1
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.ZIndex = 50
+	frame.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = frame
+
+	-- Message label
+	local messageLabel = Instance.new("TextLabel")
+	messageLabel.Name = "Message"
+	messageLabel.Size = UDim2.new(1, -20, 0, 60)
+	messageLabel.Position = UDim2.new(0, 10, 0, 14)
+	messageLabel.BackgroundTransparency = 1
+	messageLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	messageLabel.TextSize = 16
+	messageLabel.Font = Enum.Font.GothamBold
+	messageLabel.TextWrapped = true
+	messageLabel.Text = "Return to lobby? XP earned will be kept."
+	messageLabel.ZIndex = 51
+	messageLabel.Parent = frame
+
+	-- Confirm button
+	local confirmButton = Instance.new("TextButton")
+	confirmButton.Name = "ConfirmButton"
+	confirmButton.Size = UDim2.new(0, 120, 0, 34)
+	confirmButton.Position = UDim2.new(0.5, -130, 1, -48)
+	confirmButton.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+	confirmButton.BorderSizePixel = 0
+	confirmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	confirmButton.TextSize = 14
+	confirmButton.Font = Enum.Font.GothamBold
+	confirmButton.Text = "Return to Lobby"
+	confirmButton.ZIndex = 51
+	confirmButton.Parent = frame
+
+	local confirmCorner = Instance.new("UICorner")
+	confirmCorner.CornerRadius = UDim.new(0, 6)
+	confirmCorner.Parent = confirmButton
+
+	-- Cancel button
+	local cancelButton = Instance.new("TextButton")
+	cancelButton.Name = "CancelButton"
+	cancelButton.Size = UDim2.new(0, 90, 0, 34)
+	cancelButton.Position = UDim2.new(0.5, 16, 1, -48)
+	cancelButton.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+	cancelButton.BorderSizePixel = 0
+	cancelButton.TextColor3 = Color3.fromRGB(255, 200, 200)
+	cancelButton.TextSize = 14
+	cancelButton.Font = Enum.Font.GothamBold
+	cancelButton.Text = "Cancel"
+	cancelButton.ZIndex = 51
+	cancelButton.Parent = frame
+
+	local cancelCorner = Instance.new("UICorner")
+	cancelCorner.CornerRadius = UDim.new(0, 6)
+	cancelCorner.Parent = cancelButton
+
+	-- Wire confirm: fire LevelChoice("lobby") and hide dialog
+	confirmButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+		local eventsFolder = ReplicatedStorage:FindFirstChild("RemoteEvents")
+		if eventsFolder then
+			local levelChoiceEvent = eventsFolder:FindFirstChild("LevelChoice") :: RemoteEvent?
+			if levelChoiceEvent then
+				levelChoiceEvent:FireServer({ choice = "lobby" })
+			end
+		end
+	end)
+
+	-- Wire cancel: just hide the dialog
+	cancelButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+	end)
+
+	return frame
+end
+
+--- Show the leave confirmation dialog.
+showLeaveConfirmDialog = function()
+	if leaveConfirmFrame then
+		leaveConfirmFrame.Visible = true
+	end
+end
+
+--- Hide the leave confirmation dialog.
+hideLeaveConfirmDialog = function()
+	if leaveConfirmFrame then
+		leaveConfirmFrame.Visible = false
+	end
 end
 
 --============================================================================
@@ -740,6 +999,70 @@ toggleLeaderboardPanel = function()
 	end
 end
 
+--- Play a screen flash and floating text effect when the combo tier changes.
+--- @param tierName string - The new tier name to display
+local function playComboTierUpEffect(tierName: string)
+	-- Get the ScreenGui for the flash overlay
+	if not screenGui then
+		return
+	end
+
+	-- Create a brief full-screen flash (white, fades out quickly)
+	local flash = Instance.new("Frame")
+	flash.Name = "ComboFlash"
+	flash.Size = UDim2.new(1, 0, 1, 0)
+	flash.Position = UDim2.new(0, 0, 0, 0)
+	flash.BackgroundColor3 = Color3.fromRGB(255, 255, 200)
+	flash.BackgroundTransparency = 0.6
+	flash.BorderSizePixel = 0
+	flash.ZIndex = 100
+	flash.Parent = screenGui
+
+	-- Fade out the flash quickly
+	task.spawn(function()
+		local elapsed = 0
+		local flashDuration = 0.3
+		local step = 0.02
+		while elapsed < flashDuration do
+			elapsed += step
+			flash.BackgroundTransparency = 0.6 + (elapsed / flashDuration) * 0.4
+			task.wait(step)
+		end
+		flash:Destroy()
+	end)
+
+	-- Show floating tier-up text in the center of the screen
+	local tierUpLabel = Instance.new("TextLabel")
+	tierUpLabel.Name = "TierUpText"
+	tierUpLabel.Size = UDim2.new(0, 300, 0, 50)
+	tierUpLabel.Position = UDim2.new(0.5, -150, 0.4, 0)
+	tierUpLabel.BackgroundTransparency = 1
+	tierUpLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+	tierUpLabel.TextStrokeTransparency = 0.3
+	tierUpLabel.TextStrokeColor3 = Color3.fromRGB(100, 50, 0)
+	tierUpLabel.TextSize = 32
+	tierUpLabel.Font = Enum.Font.GothamBold
+	tierUpLabel.Text = tierName
+	tierUpLabel.ZIndex = 101
+	tierUpLabel.Parent = screenGui
+
+	-- Float upward and fade out over 1.5 seconds
+	task.spawn(function()
+		local elapsed = 0
+		local floatDuration = 1.5
+		local step = 0.03
+		while elapsed < floatDuration do
+			elapsed += step
+			local progress = elapsed / floatDuration
+			tierUpLabel.Position = UDim2.new(0.5, -150, 0.4 - (progress * 0.1), 0)
+			tierUpLabel.TextTransparency = progress
+			tierUpLabel.TextStrokeTransparency = 0.3 + (progress * 0.7)
+			task.wait(step)
+		end
+		tierUpLabel:Destroy()
+	end)
+end
+
 --- Calculate the cost of the next cheapest available power-up based on current XP and owned tiers.
 --- For the HUD, we show the minimum cost of any next tier the player can buy.
 local function getNextPowerUpCost(_currentXP: number): number
@@ -800,9 +1123,19 @@ local function initialize()
 	achievementToggleButton = createAchievementToggleButton(screenGui)
 	achievementPanel, achievementScrollFrame = createAchievementPanel(screenGui)
 
+	-- Create combo display
+	comboFrame, comboStreakLabel, comboTierLabel = createComboDisplay(screenGui)
+
 	-- Create leaderboard UI
 	leaderboardToggleButton = createLeaderboardToggleButton(screenGui)
 	leaderboardPanel, leaderboardScrollFrame, leaderboardPlayerRankLabel, leaderboardXPTabButton, leaderboardLevelTabButton = createLeaderboardPanel(screenGui)
+
+	-- Create leave button and confirm dialog
+	leaveButton = createLeaveButton(screenGui)
+	leaveConfirmFrame = createLeaveConfirmDialog(screenGui)
+
+	-- Create attempt/PB display
+	attemptPBLabel = createAttemptPBDisplay(screenGui)
 
 	-- Connect RemoteEvent listeners
 	local eventsFolder = ReplicatedStorage:WaitForChild("RemoteEvents", 10)
@@ -826,6 +1159,28 @@ local function initialize()
 		if levelCompletedEvent then
 			levelCompletedEvent.OnClientEvent:Connect(function(_data: any)
 				HUDManager.showLevelChoice()
+				-- Hide leave button during level complete screen
+				if leaveButton then
+					leaveButton.Visible = false
+				end
+				-- Hide leave confirm dialog if open
+				hideLeaveConfirmDialog()
+			end)
+		end
+
+		-- LevelStarted: show gameplay HUD elements including leave button and attempt/PB
+		local levelStartedEvent = eventsFolder:WaitForChild("LevelStarted", 5) :: RemoteEvent?
+		if levelStartedEvent then
+			levelStartedEvent.OnClientEvent:Connect(function(data: any)
+				if leaveButton then
+					leaveButton.Visible = true
+				end
+				-- Show attempt count and personal best
+				if type(data) == "table" then
+					local attemptCount = data.attemptCount or 1
+					local personalBest = data.personalBest or 0
+					showAttemptPB(attemptCount, personalBest)
+				end
 			end)
 		end
 
@@ -836,6 +1191,8 @@ local function initialize()
 				if levelChoiceFrame then
 					levelChoiceFrame.Visible = false
 				end
+				-- Hide leave confirm dialog if open
+				hideLeaveConfirmDialog()
 			end)
 		end
 
@@ -874,6 +1231,27 @@ local function initialize()
 				end
 			end)
 		end
+
+		-- ComboUpdate: server sends combo state changes
+		local comboUpdateEvent = eventsFolder:WaitForChild("ComboUpdate", 5) :: RemoteEvent?
+		if comboUpdateEvent then
+			comboUpdateEvent.OnClientEvent:Connect(function(data: any)
+				if type(data) == "table" then
+					HUDManager.updateCombo(data.streak or 0, data.multiplier or 1.0, data.tierName, data.tierChanged)
+				end
+			end)
+		end
+
+		-- ShowLobby: hide gameplay HUD elements when returning to lobby
+		local showLobbyEvent = eventsFolder:WaitForChild("ShowLobby", 5) :: RemoteEvent?
+		if showLobbyEvent then
+			showLobbyEvent.OnClientEvent:Connect(function(_data: any)
+				if leaveButton then
+					leaveButton.Visible = false
+				end
+				hideLeaveConfirmDialog()
+			end)
+		end
 	end
 end
 
@@ -898,6 +1276,54 @@ function HUDManager.updateXP(current: number, earned: number, nextCost: number):
 	end
 	if xpNextLabel then
 		xpNextLabel.Text = "Next: " .. tostring(math.floor(nextCost)) .. " XP"
+	end
+end
+
+--- Update the combo display with current combo state.
+--- Shows/hides the combo counter and plays tier-up effects.
+--- @param streak number - Current consecutive near-miss count
+--- @param multiplier number - Current XP multiplier
+--- @param tierName string? - Current tier display name (nil if below threshold)
+--- @param tierChanged boolean? - Whether the tier just changed (triggers effects)
+function HUDManager.updateCombo(streak: number, multiplier: number, tierName: string?, tierChanged: boolean?): ()
+	if not isInitialized then
+		initialize()
+	end
+
+	if not comboFrame or not comboStreakLabel or not comboTierLabel then
+		return
+	end
+
+	if streak <= 0 then
+		-- Hide combo display
+		comboFrame.Visible = false
+		comboStreakLabel.Text = ""
+		comboTierLabel.Text = ""
+		comboLastTierName = nil
+		return
+	end
+
+	-- Show combo display
+	comboFrame.Visible = true
+	comboStreakLabel.Text = tostring(streak) .. "x COMBO"
+	comboTierLabel.Text = tierName or ""
+
+	-- Adjust combo streak label color based on multiplier
+	if multiplier >= 5.0 then
+		comboStreakLabel.TextColor3 = Color3.fromRGB(255, 50, 50) -- Red for Unstoppable
+	elseif multiplier >= 3.0 then
+		comboStreakLabel.TextColor3 = Color3.fromRGB(255, 100, 255) -- Purple for Amazing
+	elseif multiplier >= 2.0 then
+		comboStreakLabel.TextColor3 = Color3.fromRGB(100, 200, 255) -- Blue for Great
+	elseif multiplier >= 1.5 then
+		comboStreakLabel.TextColor3 = Color3.fromRGB(255, 200, 50) -- Gold for Nice
+	else
+		comboStreakLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- White below tier
+	end
+
+	-- Play tier-up effect if tier just changed
+	if tierChanged and tierName then
+		playComboTierUpEffect(tierName)
 	end
 end
 

@@ -32,11 +32,16 @@ local DataStoreManager = require(ServerScriptService.DataStoreManager)
 local PackRegistry = require(ServerScriptService.PackRegistry)
 local ValidationService = require(ServerScriptService.ValidationService)
 local RateLimiter = require(ServerScriptService.RateLimiter)
+local CodesManager = require(ServerScriptService.CodesManager)
 local LobbyBuilder = require(ServerScriptService.LobbyBuilder)
 local TetrisPack = require(ReplicatedStorage.LevelPacks.TetrisPack)
 local Types = require(ReplicatedStorage.Types)
 local LevelUtils = require(ReplicatedStorage.LevelUtils)
 local PowerUpManager = require(ReplicatedStorage.PowerUpManager)
+local RewardsManager = require(ReplicatedStorage.RewardsManager)
+local ComboManager = require(ReplicatedStorage.ComboManager)
+local MascotManager = require(ReplicatedStorage.MascotManager)
+local GameModeManager = require(ReplicatedStorage.GameModeManager)
 
 --============================================================================
 -- Types
@@ -47,6 +52,7 @@ type PlayerState = {
     packId: string,
     levelNum: number,
     levelModel: Model?,
+    levelLayout: Types.LevelLayout?,  -- Stored layout for near-miss detection
     startTime: number,
     isActive: boolean,         -- Whether level is actively being played
     currentXP: number,         -- Player's total accumulated XP
@@ -55,6 +61,12 @@ type PlayerState = {
     completions: {[string]: {number}},  -- packId -> completed level numbers
     packMultiplier: number,    -- XP multiplier for the current pack
     powerUps: { higherJump: number, doubleJump: number, fasterSpeed: number }, -- Purchased power-up tiers
+    comboState: Types.ComboState,   -- Combo system state (near-miss tracking)
+    passedObstacleIndex: number,    -- Index of last obstacle the player has passed (for near-miss scan)
+    modeId: string,                 -- Game mode ID ("classic", "time_attack", "sprint")
+    modeConfig: Types.GameModeConfig?,  -- Mode config for current level
+    timerStartTime: number?,        -- When the mode timer started (tick)
+    timerElapsed: number?,          -- Accumulated timer seconds (for count-up)
 }
 
 --============================================================================
@@ -78,6 +90,9 @@ local XP_UPDATE_INTERVAL = 1  -- Send XP updates every 1 second
 local LEVELS_PER_PACK = 10  -- Number of levels in each pack
 local GATE_COOLDOWN = 2  -- Seconds between gate triggers per player
 local gateCooldowns: { [Player]: number } = {}  -- Prevent repeated gate triggers
+local NEAR_MISS_DISTANCE_STUDS = ComboManager.NEAR_MISS_DISTANCE * BLOCK_SCALE  -- 1 block in studs
+local MASCOT_UNLOCK_THROTTLE = 2  -- Seconds between mascot unlock checks per player
+local lastMascotCheckTime: { [Player]: number } = {}  -- Throttle unlock checks per player
 
 --============================================================================
 -- Remote Events Setup
@@ -99,6 +114,13 @@ local function createRemoteEvents()
         "ShowLobby",
         "RequestStartLevel",
         "ServerError",
+        "SaveSettings",
+        "SettingsLoaded",
+        "ComboUpdate",
+        "MascotUnlocked",
+        "TimerUpdate",
+        "ShowModeSelection",
+        "SaveTutorial",
     }
     for _, name in eventNames do
         local event = Instance.new("RemoteEvent")
@@ -111,6 +133,9 @@ local function createRemoteEvents()
     local functionNames = {
         "PurchasePowerUp",
         "RequestLeaderboard",
+        "RedeemCode",
+        "ClaimDailySpin",
+        "EquipMascot",
     }
     for _, name in functionNames do
         local fn = Instance.new("RemoteFunction")
@@ -222,6 +247,90 @@ local function fireServerError(player: Player, message: string)
 end
 
 --============================================================================
+-- Mascot Unlock Logic
+--============================================================================
+
+--- Calculate a player's login streak from their profile data.
+--- Compares lastLoginDate to current time using day boundaries (86400 seconds per day).
+--- Returns the updated streak count.
+local function calculateLoginStreak(lastLoginDate: number?, currentLoginStreak: number?): number
+    local now = os.time()
+    local currentStreak = currentLoginStreak or 0
+
+    if not lastLoginDate then
+        -- First ever login
+        return 1
+    end
+
+    -- Calculate day boundaries (using UTC days)
+    local lastDay = math.floor(lastLoginDate / 86400)
+    local todayDay = math.floor(now / 86400)
+    local dayDifference = todayDay - lastDay
+
+    if dayDifference == 0 then
+        -- Same day, streak unchanged
+        return currentStreak
+    elseif dayDifference == 1 then
+        -- Consecutive day, increment streak
+        return currentStreak + 1
+    else
+        -- Streak broken (more than 1 day gap), reset to 1
+        return 1
+    end
+end
+
+--- Attempts to unlock all qualifying mascots for a player.
+--- Evaluates each mascot definition against player data, unlocks any newly qualifying mascots,
+--- fires MascotUnlocked RemoteEvent for each new unlock, and persists to DataStore cache.
+--- @param player Player -- The player to check unlocks for
+--- @param playerData { xp: number, completions: {[string]: {number}}, comboHighest: number?, loginStreak: number? }
+local function tryUnlockMascots(player: Player, playerData: {
+    xp: number,
+    completions: {[string]: {number}},
+    comboHighest: number?,
+    loginStreak: number?,
+})
+    -- Get current unlocked list from DataStore cache
+    local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+    if not cachedProfile then
+        return
+    end
+
+    local unlockedList: {string} = cachedProfile.unlockedMascots or { "pixel_pup" }
+
+    -- Evaluate all mascot definitions
+    local mascotDefs = MascotManager.getMascotDefinitions()
+    local newUnlocks: {string} = {}
+
+    for _, mascotDef in mascotDefs do
+        -- Skip if already unlocked
+        if MascotManager.isUnlocked(unlockedList, mascotDef.id) then
+            continue
+        end
+
+        -- Check if player now meets the unlock condition
+        if MascotManager.checkUnlockConditions(mascotDef.id, playerData) then
+            -- Unlock the mascot
+            unlockedList = MascotManager.unlock(unlockedList, mascotDef.id)
+            table.insert(newUnlocks, mascotDef.id)
+        end
+    end
+
+    -- If any new unlocks occurred, persist and fire events
+    if #newUnlocks > 0 then
+        -- Update cached profile
+        cachedProfile.unlockedMascots = unlockedList
+
+        -- Fire MascotUnlocked event for each newly unlocked mascot
+        for _, mascotId in newUnlocks do
+            if remoteEvents["MascotUnlocked"] then
+                remoteEvents["MascotUnlocked"]:FireClient(player, { mascotId = mascotId })
+            end
+        end
+    end
+end
+
+--============================================================================
 -- Lobby Management
 --============================================================================
 
@@ -299,6 +408,19 @@ local function sendToLobby(player: Player)
     local playerRankLevel, playerValueLevel = LeaderboardService.getPlayerRank(player.UserId, "level")
 
     -- Fire ShowLobby RemoteEvent to client with packs + leaderboard data
+    -- Get mascot data from cached profile
+    local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+    local unlockedMascotsList: {string} = { "pixel_pup" }
+    local equippedMascotId: string = "pixel_pup"
+    if cachedProfile then
+        if cachedProfile.unlockedMascots then
+            unlockedMascotsList = cachedProfile.unlockedMascots
+        end
+        if cachedProfile.equippedMascot then
+            equippedMascotId = cachedProfile.equippedMascot
+        end
+    end
+
     if remoteEvents["ShowLobby"] then
         remoteEvents["ShowLobby"]:FireClient(player, {
             packs = packDisplayList,
@@ -310,6 +432,9 @@ local function sendToLobby(player: Player)
                 playerRankLevel = playerRankLevel,
                 playerValueLevel = playerValueLevel,
             },
+            unlockedMascots = unlockedMascotsList,
+            equippedMascot = equippedMascotId,
+            tutorialCompleted = cachedProfile and cachedProfile.tutorialCompleted or false,
         })
     end
 end
@@ -319,8 +444,9 @@ end
 --============================================================================
 
 --- Start a level for a player.
---- Generates layout, builds the model, positions the player, and starts morass.
-local function startLevel(player: Player, packId: string, levelNum: number)
+--- Generates layout, builds the model, positions the player, and starts morass (if mode allows).
+--- Accepts an optional modeId to select the game mode (defaults to "classic").
+local function startLevel(player: Player, packId: string, levelNum: number, modeId: string?)
     -- Clean up any existing level for this player
     local existingState = playerStates[player]
     if existingState and existingState.levelModel then
@@ -330,13 +456,17 @@ local function startLevel(player: Player, packId: string, levelNum: number)
     -- Clean up any existing morass
     MorassManager.cleanup(player)
 
+    -- Resolve mode config
+    local resolvedModeId = modeId or "classic"
+    local modeConfig = GameModeManager.getModeConfig(resolvedModeId)
+
     -- Generate and build the level using PackRegistry lookup, fallback to TetrisPack
     local packConfig = PackRegistry.getPackConfig(packId)
     if not packConfig then
         -- Fallback: use TetrisPack directly for backward compatibility
         packConfig = TetrisPack
     end
-    local layout = LevelGenerator.generateLevel(packConfig, levelNum)
+    local layout = LevelGenerator.generateLevel(packConfig, levelNum, modeConfig)
     local levelModel = LevelGenerator.buildLevel(layout)
     levelModel.Name = "Level_" .. player.Name .. "_" .. packId .. "_" .. tostring(levelNum)
 
@@ -358,9 +488,11 @@ local function startLevel(player: Player, packId: string, levelNum: number)
         end
     end
 
-    -- Initialize morass (spawns 50 blocks behind player start)
-    MorassManager.init(player, layout, LEVEL_START_POSITION.Z)
-    MorassManager.startMorass(player)
+    -- Initialize morass only if the mode uses it
+    if not modeConfig or modeConfig.hasMorass then
+        MorassManager.init(player, layout, LEVEL_START_POSITION.Z, levelNum)
+        MorassManager.startMorass(player)
+    end
 
     -- Get pack multiplier
     local packMultiplier = getPackMultiplier(packId)
@@ -375,12 +507,19 @@ local function startLevel(player: Player, packId: string, levelNum: number)
         existingPowerUps = existingState.powerUps
     end
 
+    -- Timer state: start timer if mode requires it
+    local timerStartTime: number? = nil
+    if modeConfig and modeConfig.hasTimer then
+        timerStartTime = tick()
+    end
+
     -- Track player state
     playerStates[player] = {
         player = player,
         packId = packId,
         levelNum = levelNum,
         levelModel = levelModel,
+        levelLayout = layout,
         startTime = tick(),
         isActive = true,
         currentXP = existingXP,
@@ -389,15 +528,40 @@ local function startLevel(player: Player, packId: string, levelNum: number)
         completions = existingCompletions,
         packMultiplier = packMultiplier,
         powerUps = existingPowerUps,
+        comboState = ComboManager.createDefaultState(),
+        passedObstacleIndex = 0,
+        modeId = resolvedModeId,
+        modeConfig = modeConfig,
+        timerStartTime = timerStartTime,
+        timerElapsed = nil,
     }
 
-    -- Notify client that level has started
+    -- Notify client that level has started (include mode info + death/PB stats)
+    local levelKey = packId .. "_" .. tostring(levelNum)
+    local attemptCount = 1
+    local personalBest = 0
+    local cachedProfileStart = DataStoreManager.getCachedData(player.UserId)
+    if cachedProfileStart then
+        if cachedProfileStart.deathCounts and cachedProfileStart.deathCounts[levelKey] then
+            attemptCount = cachedProfileStart.deathCounts[levelKey] + 1
+        end
+        if cachedProfileStart.personalBests and cachedProfileStart.personalBests[levelKey] then
+            personalBest = cachedProfileStart.personalBests[levelKey]
+        end
+    end
+
     if remoteEvents["LevelStarted"] then
         remoteEvents["LevelStarted"]:FireClient(player, {
             packId = packId,
             levelNum = levelNum,
             conveyorSpeed = layout.conveyorSpeed,
             morassVisual = layout.morassVisual,
+            modeId = resolvedModeId,
+            hasTimer = modeConfig and modeConfig.hasTimer or false,
+            timerDirection = modeConfig and modeConfig.timerDirection or nil,
+            timerDuration = modeConfig and modeConfig.timerDuration or nil,
+            attemptCount = attemptCount,
+            personalBest = personalBest,
         })
     end
 end
@@ -407,15 +571,19 @@ end
 --============================================================================
 
 --- Handle level completion when player reaches the 1000-block mark.
+--- For Sprint mode, this is triggered when the timer expires (distance-based scoring).
 local function completeLevel(player: Player)
     local state = playerStates[player]
     if not state or not state.isActive then
         return
     end
 
-    -- Deactivate level (stop morass, stop XP tracking)
+    -- Deactivate level (stop morass if applicable, stop XP tracking)
     state.isActive = false
-    MorassManager.stopMorass(player)
+    local modeConfig = state.modeConfig
+    if not modeConfig or modeConfig.hasMorass then
+        MorassManager.stopMorass(player)
+    end
 
     -- Award completion bonus
     local completionBonus = LevelUtils.calculateCompletionBonus()
@@ -429,6 +597,33 @@ local function completeLevel(player: Player)
     AchievementService.setPlayerCompletions(player, state.completions)
     AchievementService.checkPackCompletion(player, state.packId)
 
+    -- Check mascot unlocks after pack completion (pack_complete + xp_threshold triggers)
+    local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+    local comboHighest: number = 0
+    local loginStreak: number = 0
+    if cachedProfile then
+        comboHighest = cachedProfile.comboHighest or 0
+        loginStreak = cachedProfile.loginStreak or 0
+    end
+    tryUnlockMascots(player, {
+        xp = state.currentXP,
+        completions = state.completions,
+        comboHighest = comboHighest,
+        loginStreak = loginStreak,
+    })
+
+    -- Write mode-specific leaderboard score for Time Attack and Sprint
+    if state.modeId == "time_attack" and state.timerStartTime then
+        -- Time Attack: score = elapsed time in seconds (lower is better)
+        local elapsedTime = tick() - state.timerStartTime
+        LeaderboardService.updateModeScore(player.UserId, state.modeId, state.packId, elapsedTime)
+    elseif state.modeId == "sprint" and state.timerStartTime then
+        -- Sprint: score = distance traveled in blocks (higher is better)
+        local distanceStuds = math.max(0, state.lastBlockZ - LEVEL_START_POSITION.Z)
+        local distanceBlocks = math.floor(distanceStuds / BLOCK_SCALE)
+        LeaderboardService.updateModeScore(player.UserId, state.modeId, state.packId, distanceBlocks)
+    end
+
     -- Determine choices to present to the player
     local choices: {string} = {"continue", "next"}
 
@@ -439,6 +634,17 @@ local function completeLevel(player: Player)
 
     -- Fire LevelCompleted event to client
     if remoteEvents["LevelCompleted"] then
+        -- Calculate final timer value for timed modes
+        local finalTimerValue: number? = nil
+        if state.modeConfig and state.modeConfig.hasTimer and state.timerStartTime then
+            local elapsed = tick() - state.timerStartTime
+            if state.modeConfig.timerDirection == "down" then
+                finalTimerValue = math.max(0, (state.modeConfig.timerDuration or 60) - elapsed)
+            else
+                finalTimerValue = elapsed
+            end
+        end
+
         remoteEvents["LevelCompleted"]:FireClient(player, {
             bonus = completionBonus,
             totalXP = state.currentXP,
@@ -446,6 +652,8 @@ local function completeLevel(player: Player)
             levelNum = state.levelNum,
             packId = state.packId,
             choices = choices,
+            modeId = state.modeId,
+            finalTimerValue = finalTimerValue,
         })
     end
 end
@@ -458,12 +666,12 @@ local function handleLevelChoice(player: Player, choice: string)
     end
 
     if choice == "continue" then
-        -- Restart the same level
-        startLevel(player, state.packId, state.levelNum)
+        -- Restart the same level with the same mode
+        startLevel(player, state.packId, state.levelNum, state.modeId)
     elseif choice == "next" then
-        -- Advance to next level (capped at 10)
+        -- Advance to next level (capped at 10), keep mode
         local nextLevel = math.min(state.levelNum + 1, 10)
-        startLevel(player, state.packId, nextLevel)
+        startLevel(player, state.packId, nextLevel, state.modeId)
     elseif choice == "lobby" then
         -- Clean up level model and morass, send player back to lobby
         if state.levelModel then
@@ -491,10 +699,45 @@ local function eliminatePlayer(player: Player, cause: string)
     -- Temporarily deactivate
     state.isActive = false
 
+    -- Track death count and personal best for this level
+    local levelKey = state.packId .. "_" .. tostring(state.levelNum)
+    local cachedProfileDeath = DataStoreManager.getCachedData(player.UserId)
+    if cachedProfileDeath then
+        -- Increment death count
+        if not cachedProfileDeath.deathCounts then
+            cachedProfileDeath.deathCounts = {}
+        end
+        cachedProfileDeath.deathCounts[levelKey] = (cachedProfileDeath.deathCounts[levelKey] or 0) + 1
+
+        -- Update personal best distance (convert studs to blocks)
+        local distanceStuds = math.max(0, state.lastBlockZ - LEVEL_START_POSITION.Z)
+        local distanceBlocks = math.floor(distanceStuds / BLOCK_SCALE)
+        if not cachedProfileDeath.personalBests then
+            cachedProfileDeath.personalBests = {}
+        end
+        local currentBest = cachedProfileDeath.personalBests[levelKey] or 0
+        if distanceBlocks > currentBest then
+            cachedProfileDeath.personalBests[levelKey] = distanceBlocks
+        end
+    end
+
     -- XP is retained — runXP was already added to currentXP incrementally
     -- Reset runXP counter for next run but keep currentXP intact
     state.runXP = 0
     state.lastBlockZ = LEVEL_START_POSITION.Z
+
+    -- Reset combo on elimination
+    state.comboState = ComboManager.resetCombo(state.comboState)
+    state.passedObstacleIndex = 0
+
+    -- Notify client of combo reset
+    if remoteEvents["ComboUpdate"] then
+        remoteEvents["ComboUpdate"]:FireClient(player, {
+            streak = 0,
+            multiplier = 1.0,
+            tierName = nil,
+        })
+    end
 
     -- Respawn player at level start position
     local character = player.Character
@@ -505,9 +748,18 @@ local function eliminatePlayer(player: Player, cause: string)
         end
     end
 
-    -- Reset morass to spawn position (50 blocks behind) and restart
-    MorassManager.resetMorass(player)
-    MorassManager.startMorass(player)
+    -- Reset morass to spawn position (50 blocks behind) and restart (only if mode has morass)
+    local modeConfig = state.modeConfig
+    if not modeConfig or modeConfig.hasMorass then
+        MorassManager.resetMorass(player)
+        MorassManager.startMorass(player)
+    end
+
+    -- Reset timer on elimination if mode has a timer
+    if modeConfig and modeConfig.hasTimer then
+        state.timerStartTime = tick()
+        state.timerElapsed = nil
+    end
 
     -- Re-activate level
     state.startTime = tick()
@@ -540,12 +792,49 @@ local function onPlayerJoin(player: Player)
     local humanoid = character:FindFirstChild("Humanoid") :: Humanoid?
     if humanoid then
         humanoid.HipHeight = 2.5 -- Raises the capsule so total height ≈ 6 studs (3 blocks)
+
+        -- Listen for initial character death (obstacle collision resets combo)
+        humanoid.Died:Connect(function()
+            local state = playerStates[player]
+            if state and state.isActive then
+                if state.comboState.streak > 0 then
+                    state.comboState = ComboManager.resetCombo(state.comboState)
+                    state.passedObstacleIndex = 0
+                    if remoteEvents["ComboUpdate"] then
+                        remoteEvents["ComboUpdate"]:FireClient(player, {
+                            streak = 0,
+                            multiplier = 1.0,
+                            tierName = nil,
+                        })
+                    end
+                end
+            end
+        end)
     end
 
     -- Also set this on future respawns
     player.CharacterAdded:Connect(function(newCharacter: Model)
         local newHumanoid = newCharacter:WaitForChild("Humanoid") :: Humanoid
         newHumanoid.HipHeight = 2.5
+
+        -- Listen for character death (obstacle collision resets combo)
+        newHumanoid.Died:Connect(function()
+            local state = playerStates[player]
+            if state and state.isActive then
+                -- Reset combo on any death (obstacle hit, etc.)
+                if state.comboState.streak > 0 then
+                    state.comboState = ComboManager.resetCombo(state.comboState)
+                    state.passedObstacleIndex = 0
+                    if remoteEvents["ComboUpdate"] then
+                        remoteEvents["ComboUpdate"]:FireClient(player, {
+                            streak = 0,
+                            multiplier = 1.0,
+                            tierName = nil,
+                        })
+                    end
+                end
+            end
+        end)
     end)
 
     -- Load player data from DataStore (or use defaults on failure)
@@ -554,12 +843,18 @@ local function onPlayerJoin(player: Player)
         profileData = Types.DEFAULT_PLAYER_PROFILE
     end
 
+    -- Calculate and update login streak
+    local loginStreak = calculateLoginStreak(profileData.lastLoginDate, profileData.loginStreak)
+    profileData.loginStreak = loginStreak
+    profileData.lastLoginDate = os.time()
+
     -- Initialize player state with persisted data (not actively in a level yet)
     playerStates[player] = {
         player = player,
         packId = "",
         levelNum = 0,
         levelModel = nil,
+        levelLayout = nil,
         startTime = tick(),
         isActive = false,
         currentXP = profileData.xp,
@@ -568,10 +863,32 @@ local function onPlayerJoin(player: Player)
         completions = profileData.completions,
         packMultiplier = 1,
         powerUps = profileData.powerUps,
+        comboState = ComboManager.createDefaultState(),
+        passedObstacleIndex = 0,
+        modeId = "classic",
+        modeConfig = nil,
+        timerStartTime = nil,
+        timerElapsed = nil,
     }
 
     -- Spawn player in lobby and send pack data to client
     sendToLobby(player)
+
+    -- Check mascot unlocks on login (for login_streak condition)
+    tryUnlockMascots(player, {
+        xp = profileData.xp,
+        completions = profileData.completions,
+        comboHighest = profileData.comboHighest or 0,
+        loginStreak = loginStreak,
+    })
+
+    -- Load redeemed codes from player profile
+    CodesManager.loadPlayerRedemptions(player.UserId, profileData.redeemedCodes)
+
+    -- Send saved settings to client
+    if remoteEvents["SettingsLoaded"] and profileData.settings then
+        remoteEvents["SettingsLoaded"]:FireClient(player, profileData.settings)
+    end
 end
 
 --- Handle a player leaving the game.
@@ -592,16 +909,25 @@ local function onPlayerLeave(player: Player)
     -- Clean up rate limiter state
     RateLimiter.reset(player.UserId)
 
+    -- Clean up codes manager state
+    CodesManager.clearPlayer(player.UserId)
+
     -- Clean up gate cooldown
     gateCooldowns[player] = nil
+
+    -- Clean up mascot unlock throttle
+    lastMascotCheckTime[player] = nil
 end
 
 --============================================================================
 -- Heartbeat: Morass Collision + XP Accumulation + Level Completion
 --============================================================================
 
---- Each frame: check morass collision, accumulate XP, detect level completion.
+--- Each frame: check morass collision, detect near-misses, accumulate XP, detect level completion.
+--- Also handles mode-specific timer logic (Time Attack count-up, Sprint countdown).
 local function onHeartbeat(_deltaTime: number)
+    local currentTime = tick()
+
     for player, state in playerStates do
         if not state.isActive then
             continue
@@ -618,27 +944,144 @@ local function onHeartbeat(_deltaTime: number)
             continue
         end
 
-        local playerZ = humanoidRootPart.Position.Z
+        local playerPosition = humanoidRootPart.Position
+        local playerZ = playerPosition.Z
 
-        -- Check morass collision
-        if MorassManager.checkCollision(player) then
-            eliminatePlayer(player, "morass")
-            continue
+        -- Check morass collision (only if mode has morass)
+        local modeConfig = state.modeConfig
+        if not modeConfig or modeConfig.hasMorass then
+            if MorassManager.checkCollision(player) then
+                eliminatePlayer(player, "morass")
+                continue
+            end
+        end
+
+        -- Sprint timer: check if countdown expired
+        if modeConfig and modeConfig.hasTimer and modeConfig.timerDirection == "down" and state.timerStartTime then
+            local elapsed = currentTime - state.timerStartTime
+            local remaining = (modeConfig.timerDuration or 60) - elapsed
+            if remaining <= 0 then
+                -- Sprint time is up — complete the level (distance-based scoring)
+                completeLevel(player)
+                continue
+            end
+        end
+
+        -- Combo: check timeout (reset if no near-miss for > 1 second)
+        if state.comboState.streak > 0 and ComboManager.shouldTimeout(state.comboState, currentTime) then
+            state.comboState = ComboManager.resetCombo(state.comboState)
+
+            -- Notify client of combo reset
+            if remoteEvents["ComboUpdate"] then
+                remoteEvents["ComboUpdate"]:FireClient(player, {
+                    streak = 0,
+                    multiplier = 1.0,
+                    tierName = nil,
+                })
+            end
+        end
+
+        -- Combo: detect near-miss events for obstacles the player has just passed
+        if state.levelLayout and state.levelLayout.obstacles then
+            local obstacles = state.levelLayout.obstacles
+            local startIndex = state.passedObstacleIndex + 1
+
+            for i = startIndex, #obstacles do
+                local obstacle = obstacles[i]
+                local obstacleZ = obstacle.position.Z * BLOCK_SCALE
+
+                -- Only process obstacles the player has passed (playerZ > obstacleZ)
+                if playerZ <= obstacleZ then
+                    break -- Obstacles are sorted by Z, so no more have been passed
+                end
+
+                -- Player has passed this obstacle — check if it was a near-miss
+                -- Calculate closest lateral distance (X axis) from player to obstacle blocks
+                local obstacleX = obstacle.position.X * BLOCK_SCALE
+                local lateralDist = math.abs(playerPosition.X - obstacleX)
+
+                -- Check Z distance (how close we passed)
+                local zDist = math.abs(playerZ - obstacleZ)
+
+                -- Near-miss: passed within NEAR_MISS_DISTANCE_STUDS without collision
+                -- (if collision happened, eliminatePlayer would have been called already)
+                if lateralDist <= NEAR_MISS_DISTANCE_STUDS * 3 or zDist <= NEAR_MISS_DISTANCE_STUDS * 2 then
+                    -- This obstacle was close enough to count as a near-miss
+                    local prevTierName = state.comboState.tierName
+
+                    if state.comboState.streak == 0 then
+                        state.comboState = ComboManager.startCombo(state.comboState, currentTime)
+                    else
+                        state.comboState = ComboManager.incrementCombo(state.comboState, currentTime)
+                    end
+
+                    -- Fire ComboUpdate to client
+                    if remoteEvents["ComboUpdate"] then
+                        remoteEvents["ComboUpdate"]:FireClient(player, {
+                            streak = state.comboState.streak,
+                            multiplier = state.comboState.multiplier,
+                            tierName = state.comboState.tierName,
+                            tierChanged = (state.comboState.tierName ~= prevTierName and state.comboState.tierName ~= nil),
+                        })
+                    end
+
+                    -- Check combo milestone mascot unlock (e.g., Flame Fox at 50-combo)
+                    -- Update comboHighest in profile and check if milestone triggers unlock
+                    local cachedProfileCombo = DataStoreManager.getCachedData(player.UserId)
+                    if cachedProfileCombo then
+                        local prevHighest = cachedProfileCombo.comboHighest or 0
+                        if state.comboState.streak > prevHighest then
+                            cachedProfileCombo.comboHighest = state.comboState.streak
+                            -- Only check unlock when crossing a milestone threshold
+                            tryUnlockMascots(player, {
+                                xp = state.currentXP,
+                                completions = state.completions,
+                                comboHighest = state.comboState.streak,
+                                loginStreak = cachedProfileCombo.loginStreak or 0,
+                            })
+                        end
+                    end
+                end
+
+                state.passedObstacleIndex = i
+            end
         end
 
         -- XP Accumulation: award XP for each new block traveled (convert studs to blocks)
         if playerZ > state.lastBlockZ then
             local blocksAdvanced = math.floor(playerZ / BLOCK_SCALE) - math.floor(state.lastBlockZ / BLOCK_SCALE)
             if blocksAdvanced > 0 then
+                -- Apply combo multiplier on top of pack multiplier
+                local comboMultiplier = ComboManager.getCurrentMultiplier(state.comboState)
                 local xpEarned = LevelUtils.calculateXP(blocksAdvanced, state.packMultiplier)
+                xpEarned = math.floor(xpEarned * comboMultiplier)
                 state.currentXP += xpEarned
                 state.runXP += xpEarned
                 state.lastBlockZ = playerZ
+
+                -- Throttled mascot unlock check for XP threshold (Golden Dragon)
+                local lastCheck = lastMascotCheckTime[player] or 0
+                if currentTime - lastCheck >= MASCOT_UNLOCK_THROTTLE then
+                    lastMascotCheckTime[player] = currentTime
+                    local cachedProfileXP = DataStoreManager.getCachedData(player.UserId)
+                    if cachedProfileXP then
+                        cachedProfileXP.xp = state.currentXP
+                        tryUnlockMascots(player, {
+                            xp = state.currentXP,
+                            completions = state.completions,
+                            comboHighest = cachedProfileXP.comboHighest or 0,
+                            loginStreak = cachedProfileXP.loginStreak or 0,
+                        })
+                    end
+                end
             end
         end
 
         -- Level Completion Detection: player reached the end (scaled)
-        if playerZ >= LEVEL_LENGTH_STUDS then
+        -- Sprint mode has no target distance — level ends when timer expires (handled above)
+        if state.modeConfig and state.modeConfig.targetDistance == nil then
+            -- No distance target (Sprint mode): completion is timer-driven only
+        elseif playerZ >= LEVEL_LENGTH_STUDS then
             completeLevel(player)
         end
     end
@@ -649,6 +1092,7 @@ end
 --============================================================================
 
 --- Periodically sends XP updates to clients (every 1 second).
+--- Also sends TimerUpdate events for modes with timers.
 local lastXPUpdateTime = 0
 
 local function onXPUpdateHeartbeat(_deltaTime: number)
@@ -667,6 +1111,27 @@ local function onXPUpdateHeartbeat(_deltaTime: number)
                 levelNum = state.levelNum,
             })
         end
+
+        -- Send timer update if mode has a timer and level is active
+        if state.isActive and state.modeConfig and state.modeConfig.hasTimer and state.timerStartTime then
+            local elapsed = currentTime - state.timerStartTime
+            local timerValue: number
+            if state.modeConfig.timerDirection == "down" then
+                -- Countdown: show remaining time
+                timerValue = math.max(0, (state.modeConfig.timerDuration or 60) - elapsed)
+            else
+                -- Count-up: show elapsed time
+                timerValue = elapsed
+            end
+
+            if remoteEvents["TimerUpdate"] then
+                remoteEvents["TimerUpdate"]:FireClient(player, {
+                    timerValue = timerValue,
+                    timerDirection = state.modeConfig.timerDirection,
+                    modeId = state.modeId,
+                })
+            end
+        end
     end
 end
 
@@ -677,6 +1142,9 @@ end
 local function init()
     -- Initialize PackRegistry: auto-discover and register all level packs
     PackRegistry.init()
+
+    -- Initialize CodesManager: seed default codes
+    CodesManager.init()
 
     -- Build the physical 3D lobby (ground, gate, shop, signs)
     local gateTrigger = LobbyBuilder.init()
@@ -714,17 +1182,52 @@ local function init()
                 return
             end
 
-            -- Start Tetris pack level 1 (or next uncompleted level)
+            -- Determine next level to play
+            local packId = "tetris"
             local levelNum = 1
-            if state and state.completions["tetris"] then
+            if state and state.completions[packId] then
                 -- Start at the next uncompleted level
-                local completed = #state.completions["tetris"]
+                local completed = #state.completions[packId]
                 if completed < LEVELS_PER_PACK then
                     levelNum = completed + 1
                 end
             end
 
-            startLevel(player, "tetris", levelNum)
+            -- Check if pack is fully completed (all 10 levels done)
+            -- If complete, show mode selection UI instead of starting Classic immediately
+            local completions: {[string]: {number}} = {}
+            if state then
+                completions = state.completions
+            end
+
+            local packFullyCompleted = getCompletedLevelCount(completions, packId) >= LEVELS_PER_PACK
+            if packFullyCompleted then
+                -- Build available modes list (only unlocked modes)
+                local allModes = GameModeManager.getAvailableModes()
+                local availableModes: {{ id: string, name: string, description: string }} = {}
+                for _, mode in allModes do
+                    if GameModeManager.isModeUnlocked(mode.id, packId, completions) then
+                        table.insert(availableModes, {
+                            id = mode.id,
+                            name = mode.name,
+                            description = mode.description,
+                        })
+                    end
+                end
+
+                -- If more than just Classic is available, show mode selection
+                if #availableModes > 1 and remoteEvents["ShowModeSelection"] then
+                    remoteEvents["ShowModeSelection"]:FireClient(player, {
+                        packId = packId,
+                        levelNum = levelNum,
+                        modes = availableModes,
+                    })
+                    return
+                end
+            end
+
+            -- Default: start Classic mode immediately (uncompleted pack or only Classic unlocked)
+            startLevel(player, packId, levelNum)
         end)
     end
 
@@ -757,8 +1260,12 @@ local function init()
             end
             local packId = data.packId
             local levelNum = data.levelNum or 1
+            local requestedModeId = data.modeId or "classic"
             if type(packId) ~= "string" then
                 return
+            end
+            if type(requestedModeId) ~= "string" then
+                requestedModeId = "classic"
             end
             -- Validate pack exists in registry
             if not PackRegistry.hasPack(packId) then
@@ -783,8 +1290,22 @@ local function init()
                     return
                 end
             end
-            -- Start the level for the player (always level 1 when entering from portal)
-            startLevel(player, packId, math.clamp(levelNum, 1, 10))
+
+            -- Validate mode is unlocked for this pack (non-classic modes require pack completion)
+            if requestedModeId ~= "classic" then
+                local completions: {[string]: {number}} = {}
+                local state = playerStates[player]
+                if state then
+                    completions = state.completions
+                end
+                if not GameModeManager.isModeUnlocked(requestedModeId, packId, completions) then
+                    fireServerError(player, "Mode locked: complete this pack in Classic first")
+                    return
+                end
+            end
+
+            -- Start the level for the player
+            startLevel(player, packId, math.clamp(levelNum, 1, 10), requestedModeId)
         end)
     end
 
@@ -887,6 +1408,190 @@ local function init()
                 board = board,
             }
         end
+    end
+
+    -- Set up RedeemCode RemoteFunction handler
+    if remoteFunctions["RedeemCode"] then
+        remoteFunctions["RedeemCode"].OnServerInvoke = function(player: Player, data: any)
+            -- Rate limit check
+            if not RateLimiter.check(player.UserId) then
+                return { success = false, message = "Rate limit exceeded, please slow down" }
+            end
+
+            -- Validate input
+            if type(data) ~= "string" then
+                return { success = false, message = "Invalid code input" }
+            end
+
+            -- Attempt redemption
+            local result = CodesManager.redeemCode(player.UserId, data)
+
+            -- If successful, apply the reward and persist
+            if result.success and result.reward then
+                local state = playerStates[player]
+                if state and result.reward.rewardType == "xp" then
+                    local xpAmount = result.reward.amount or 0
+                    state.currentXP += xpAmount
+                end
+
+                -- Update the DataStore cache with the redeemed codes list
+                local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+                if cachedProfile then
+                    cachedProfile.redeemedCodes = CodesManager.getRedeemedList(player.UserId)
+                    if state then
+                        cachedProfile.xp = state.currentXP
+                    end
+                end
+            end
+
+            return {
+                success = result.success,
+                message = result.message,
+            }
+        end
+    end
+
+    -- Set up ClaimDailySpin RemoteFunction handler
+    if remoteFunctions["ClaimDailySpin"] then
+        remoteFunctions["ClaimDailySpin"].OnServerInvoke = function(player: Player, _data: any)
+            -- Rate limit check
+            if not RateLimiter.check(player.UserId) then
+                return { success = false, message = "Rate limit exceeded, please slow down" }
+            end
+
+            -- Get player state
+            local state = playerStates[player]
+            if not state then
+                return { success = false, message = "No player state" }
+            end
+
+            -- Check if player already spun today (server-authoritative via RewardsManager)
+            local now = os.time()
+            local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+            local lastSpinDate: number? = nil
+            if cachedProfile then
+                lastSpinDate = cachedProfile.lastDailySpinDate
+            end
+
+            if not RewardsManager.canSpinToday(lastSpinDate, now) then
+                return { success = false, message = "Come back tomorrow!" }
+            end
+
+            -- Determine reward via RewardsManager (nil seed = random)
+            local rewardResult = RewardsManager.determineReward(nil)
+
+            -- Apply reward
+            state.currentXP += rewardResult.xpAmount
+
+            -- Persist the spin timestamp
+            if cachedProfile then
+                cachedProfile.lastDailySpinDate = now
+                cachedProfile.xp = state.currentXP
+            end
+
+            return {
+                success = true,
+                message = "You won " .. rewardResult.label .. "!",
+                reward = rewardResult.xpAmount,
+                segmentIndex = rewardResult.segmentIndex,
+            }
+        end
+    end
+
+    -- Set up EquipMascot RemoteFunction handler
+    if remoteFunctions["EquipMascot"] then
+        remoteFunctions["EquipMascot"].OnServerInvoke = function(player: Player, data: any)
+            -- Rate limit check
+            if not RateLimiter.check(player.UserId) then
+                return { success = false, message = "Rate limit exceeded, please slow down" }
+            end
+
+            -- Validate input
+            if type(data) ~= "string" then
+                return { success = false, message = "Invalid mascot ID" }
+            end
+
+            local mascotId = data
+
+            -- Get player state
+            local state = playerStates[player]
+            if not state then
+                return { success = false, message = "No player state" }
+            end
+
+            -- Get unlocked mascots from DataStore cache
+            local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+            local unlockedList: {string} = { "pixel_pup" }
+            if cachedProfile and cachedProfile.unlockedMascots then
+                unlockedList = cachedProfile.unlockedMascots
+            end
+
+            -- Validate equip via MascotManager
+            local equippedId, equipError = MascotManager.equip(mascotId, unlockedList)
+            if not equippedId then
+                return { success = false, message = equipError or "Cannot equip mascot" }
+            end
+
+            -- Persist equipped mascot
+            if cachedProfile then
+                cachedProfile.equippedMascot = equippedId
+            end
+
+            return { success = true, mascotId = equippedId }
+        end
+    end
+
+    -- Listen for SaveSettings event from client
+    if remoteEvents["SaveSettings"] then
+        remoteEvents["SaveSettings"].OnServerEvent:Connect(function(player: Player, data: any)
+            -- Rate limit check
+            if not RateLimiter.check(player.UserId) then
+                return
+            end
+
+            -- Validate input
+            if type(data) ~= "table" then
+                return
+            end
+
+            local newMusicVolume = data.musicVolume
+            local newSfxVolume = data.sfxVolume
+            local newScreenShake = data.screenShake
+
+            -- Validate types and ranges
+            if type(newMusicVolume) ~= "number" or type(newSfxVolume) ~= "number" or type(newScreenShake) ~= "boolean" then
+                return
+            end
+
+            newMusicVolume = math.clamp(math.floor(newMusicVolume), 0, 100)
+            newSfxVolume = math.clamp(math.floor(newSfxVolume), 0, 100)
+
+            -- Persist settings in the DataStore cache
+            local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+            if cachedProfile then
+                cachedProfile.settings = {
+                    musicVolume = newMusicVolume,
+                    sfxVolume = newSfxVolume,
+                    screenShake = newScreenShake,
+                }
+            end
+        end)
+    end
+
+    -- Listen for SaveTutorial event from client
+    if remoteEvents["SaveTutorial"] then
+        remoteEvents["SaveTutorial"].OnServerEvent:Connect(function(player: Player, _data: any)
+            -- Rate limit check
+            if not RateLimiter.check(player.UserId) then
+                return
+            end
+
+            -- Persist tutorialCompleted flag in the DataStore cache
+            local cachedProfile = DataStoreManager.getCachedData(player.UserId)
+            if cachedProfile then
+                cachedProfile.tutorialCompleted = true
+            end
+        end)
     end
 
     -- Connect player events
