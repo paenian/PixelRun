@@ -18,6 +18,10 @@ export type SoundManager = {
 	playLobbyMusic: () -> (),
 	crossfade: (toTrack: string, duration: number) -> (),
 	playSFX: (effect: string) -> (),
+	setMusicVolume: (volume: number) -> (),
+	setSFXVolume: (volume: number) -> (),
+	getMusicVolume: () -> number,
+	getSFXVolume: () -> number,
 }
 
 --============================================================================
@@ -33,6 +37,7 @@ local DEFAULT_CROSSFADE_DURATION = 1.5
 local THEME_MUSIC: { [string]: string } = {
 	lobby = "rbxassetid://0",
 	tetris = "rbxassetid://0",
+	pipeworld = "rbxassetid://0",
 }
 
 --- Map of SFX effect names to asset IDs.
@@ -42,6 +47,9 @@ local SFX_SOUNDS: { [string]: string } = {
 	levelComplete = "rbxassetid://0",
 	achievement = "rbxassetid://0",
 	purchase = "rbxassetid://0",
+	pipeWhoosh = "rbxassetid://0",
+	coinDing = "rbxassetid://0",
+	chomp = "rbxassetid://0",
 }
 
 --============================================================================
@@ -185,6 +193,32 @@ function SoundManager.playSFX(effect: string): ()
 	sound.Ended:Connect(function()
 		sound:Destroy()
 	end)
+end
+
+--- Set the music volume (0-100 percentage). Applies immediately to the current track.
+--- @param volume number -- Volume percentage (0-100)
+function SoundManager.setMusicVolume(volume: number): ()
+	MUSIC_VOLUME = math.clamp(volume, 0, 100) / 100
+	-- Apply to currently playing music
+	if currentMusic then
+		currentMusic.Volume = MUSIC_VOLUME
+	end
+end
+
+--- Set the SFX volume (0-100 percentage). Applies to future sound effects.
+--- @param volume number -- Volume percentage (0-100)
+function SoundManager.setSFXVolume(volume: number): ()
+	SFX_VOLUME = math.clamp(volume, 0, 100) / 100
+end
+
+--- Get the current music volume as a percentage (0-100).
+function SoundManager.getMusicVolume(): number
+	return MUSIC_VOLUME * 100
+end
+
+--- Get the current SFX volume as a percentage (0-100).
+function SoundManager.getSFXVolume(): number
+	return SFX_VOLUME * 100
 end
 
 return SoundManager

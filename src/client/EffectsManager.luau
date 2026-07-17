@@ -13,6 +13,7 @@
 
 local Players = game:GetService("Players")
 local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
 
 local EffectsManager = {}
 
@@ -21,6 +22,8 @@ export type EffectsManager = {
 	playXPGain: (amount: number, position: Vector3) -> (),
 	playDeath: (position: Vector3) -> (),
 	playAchievement: (name: string, duration: number) -> (),
+	startMorassProximityWarning: (levelNum: number) -> (),
+	stopMorassProximityWarning: () -> (),
 }
 
 --============================================================================
@@ -271,6 +274,176 @@ function EffectsManager.playAchievement(name: string, duration: number): ()
 	end)
 
 	Debris:AddItem(textPart, duration + 0.5)
+end
+
+--============================================================================
+-- Morass Proximity Warning (Levels 7-10)
+--============================================================================
+
+--- State for the morass proximity warning system
+local morassWarningGui: ScreenGui? = nil
+local morassWarningFrame: Frame? = nil
+local morassWarningConnection: RBXScriptConnection? = nil
+local morassWarningLevelNum: number = 1
+local morassCameraShakeOffset: CFrame = CFrame.new()
+
+--- Proximity distance threshold (in studs, 20 blocks * 2 scale = 40 studs)
+local MORASS_PROXIMITY_THRESHOLD = 40
+
+--- Creates the red screen-edge warning glow GUI.
+local function createWarningGui(): (ScreenGui, Frame)
+	local player = Players.LocalPlayer
+	local playerGui = player:WaitForChild("PlayerGui") :: PlayerGui
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "MorassWarningGui"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.DisplayOrder = 100
+	gui.Parent = playerGui
+
+	-- Full-screen frame with red gradient edges (transparent center)
+	local frame = Instance.new("Frame")
+	frame.Name = "WarningGlow"
+	frame.Size = UDim2.new(1, 0, 1, 0)
+	frame.Position = UDim2.new(0, 0, 0, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	frame.BackgroundTransparency = 1 -- Start fully transparent
+	frame.BorderSizePixel = 0
+	frame.Parent = gui
+
+	-- Use a UIGradient for the edge-to-center fade
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 30, 0)),
+		ColorSequenceKeypoint.new(0.3, Color3.fromRGB(255, 0, 0)),
+		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(0, 0, 0)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 0, 0)),
+	})
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.25, 0.7),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	gradient.Parent = frame
+
+	return gui, frame
+end
+
+--- Starts the morass proximity warning system. Monitors the distance between
+--- the player and their morass part each frame. For levels 7-10, shows a red
+--- screen-edge glow and subtle camera shake when the morass is within 20 blocks.
+---
+--- @param levelNum number -- The current level number (1-10)
+function EffectsManager.startMorassProximityWarning(levelNum: number): ()
+	-- Clean up any existing warning
+	EffectsManager.stopMorassProximityWarning()
+
+	morassWarningLevelNum = levelNum
+
+	-- Only show proximity effects for levels 7-10
+	if levelNum < 7 then
+		return
+	end
+
+	-- Create the warning GUI
+	local gui, frame = createWarningGui()
+	morassWarningGui = gui
+	morassWarningFrame = frame
+
+	-- Connect to RenderStepped for per-frame proximity checking
+	morassWarningConnection = RunService.RenderStepped:Connect(function(_deltaTime: number)
+		local player = Players.LocalPlayer
+		if not player or not player.Character then
+			return
+		end
+
+		local rootPart = player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if not rootPart then
+			return
+		end
+
+		-- Find this player's morass part in workspace
+		local morassPart: Part? = nil
+		for _, obj in workspace:GetChildren() do
+			if obj:IsA("Part") and obj:GetAttribute("IsMorass") == true then
+				local ownerId = obj:GetAttribute("OwnerId")
+				if ownerId == player.UserId then
+					morassPart = obj :: Part
+					break
+				end
+			end
+		end
+
+		if not morassPart then
+			-- No morass found, hide warning
+			if morassWarningFrame then
+				morassWarningFrame.BackgroundTransparency = 1
+			end
+			return
+		end
+
+		-- Calculate distance between player and morass front face (Z axis)
+		local playerZ = rootPart.Position.Z
+		local morassZ = morassPart.Position.Z + (morassPart.Size.Z / 2) -- front face
+		local distance = playerZ - morassZ
+
+		if distance <= MORASS_PROXIMITY_THRESHOLD and distance > 0 then
+			-- Morass is close! Scale intensity by proximity (closer = more intense)
+			local intensity = 1 - (distance / MORASS_PROXIMITY_THRESHOLD)
+			intensity = math.clamp(intensity, 0, 1)
+
+			-- Red glow: show the frame with transparency based on proximity
+			if morassWarningFrame then
+				-- Max opacity at 0.6 to avoid being too obtrusive
+				morassWarningFrame.BackgroundTransparency = 1 - (intensity * 0.4)
+			end
+
+			-- Subtle camera shake (only for levels 7+, respects screenShake setting)
+			local camera = workspace.CurrentCamera
+			if camera then
+				-- Check player's screenShake preference (default: enabled)
+				local screenShakeEnabled = true
+				local playerData = player:FindFirstChild("PlayerSettings")
+				if playerData then
+					local shakeAttr = playerData:GetAttribute("screenShake")
+					if shakeAttr == false then
+						screenShakeEnabled = false
+					end
+				end
+
+				if screenShakeEnabled then
+					local shakeIntensity = intensity * 0.15 -- Max 0.15 studs offset
+					local shakeX = math.sin(tick() * 20) * shakeIntensity
+					local shakeY = math.cos(tick() * 17) * shakeIntensity * 0.5
+					morassCameraShakeOffset = CFrame.new(shakeX, shakeY, 0)
+					camera.CFrame = camera.CFrame * morassCameraShakeOffset
+				end
+			end
+		else
+			-- Morass is far enough away, hide effects
+			if morassWarningFrame then
+				morassWarningFrame.BackgroundTransparency = 1
+			end
+		end
+	end)
+end
+
+--- Stops the morass proximity warning system and cleans up resources.
+function EffectsManager.stopMorassProximityWarning(): ()
+	if morassWarningConnection then
+		morassWarningConnection:Disconnect()
+		morassWarningConnection = nil
+	end
+
+	if morassWarningGui then
+		morassWarningGui:Destroy()
+		morassWarningGui = nil
+	end
+
+	morassWarningFrame = nil
+	morassCameraShakeOffset = CFrame.new()
 end
 
 return EffectsManager

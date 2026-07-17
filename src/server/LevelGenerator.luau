@@ -145,10 +145,16 @@ end
 --- to probabilistically place obstacles. Obstacle types are filtered by the
 --- difficulty tier for the given level number.
 ---
+--- An optional modeConfig parameter modifies conveyor speed based on game mode:
+--- - Time Attack (hasMorass=false): conveyorSpeed = base * 0.7 (slower conveyor)
+--- - Sprint (timerDirection="down"): conveyorSpeed = base * 0.3 (very slow morass)
+--- - Classic / nil: no modification
+---
 --- @param packConfig Types.LevelPackConfig -- The level pack configuration
 --- @param levelNum number -- Level number within the pack (1-10)
+--- @param modeConfig Types.GameModeConfig? -- Optional game mode configuration
 --- @return Types.LevelLayout -- Generated layout with obstacle positions
-function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNum: number): Types.LevelLayout
+function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNum: number, modeConfig: Types.GameModeConfig?): Types.LevelLayout
     -- Clamp level number to valid range
     local level = math.clamp(levelNum, 1, 10)
 
@@ -267,6 +273,17 @@ function LevelGenerator.generateLevel(packConfig: Types.LevelPackConfig, levelNu
     local maxSpeed = 12
     local t = (level - 1) / 9
     local conveyorSpeed = baseSpeed + t * (maxSpeed - baseSpeed)
+
+    -- Apply mode-specific speed multiplier
+    if modeConfig then
+        if not modeConfig.hasMorass then
+            -- Time Attack: no morass, slower conveyor (0.7x)
+            conveyorSpeed = conveyorSpeed * 0.7
+        elseif modeConfig.timerDirection == "down" then
+            -- Sprint: very slow morass (0.3x)
+            conveyorSpeed = conveyorSpeed * 0.3
+        end
+    end
 
     local layout: Types.LevelLayout = {
         obstacles = obstacles,

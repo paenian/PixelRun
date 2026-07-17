@@ -24,6 +24,12 @@ local EffectsManager = require(script.Parent.EffectsManager)
 local SoundManager = require(script.Parent.SoundManager)
 local HUDManager = require(script.Parent.HUDManager)
 local LobbyUI = require(script.Parent.LobbyUI)
+local ShopUI = require(script.Parent.ShopUI)
+local CodesUI = require(script.Parent.CodesUI)
+local SpinUI = require(script.Parent.SpinUI)
+local SettingsUI = require(script.Parent.SettingsUI)
+local ModeSelectUI = require(script.Parent.ModeSelectUI)
+local TutorialUI = require(script.Parent.TutorialUI)
 
 --============================================================================
 -- Helpers
@@ -59,7 +65,7 @@ local function wireEvents()
         return
     end
 
-    -- LevelStarted → Play pack music based on the theme
+    -- LevelStarted → Play pack music based on the theme + trigger tutorial if new player
     local levelStartedEvent = eventsFolder:WaitForChild("LevelStarted", 5) :: RemoteEvent?
     if levelStartedEvent then
         levelStartedEvent.OnClientEvent:Connect(function(data: any)
@@ -68,24 +74,33 @@ local function wireEvents()
                 -- The server sends { packId, levelNum, conveyorSpeed, morassVisual }
                 local theme = data.morassVisual or data.packId or "tetris"
                 SoundManager.playPackMusic(theme)
+
+                -- Start morass proximity warning with level-scaled intensity
+                local levelNum = data.levelNum or 1
+                EffectsManager.startMorassProximityWarning(levelNum)
             end
+            -- Trigger tutorial overlay for new players on first level start
+            TutorialUI.onLevelStarted()
         end)
     end
 
-    -- ShowLobby → Play lobby music
+    -- ShowLobby → Play lobby music + notify TutorialUI + stop morass warning
     local showLobbyEvent = eventsFolder:WaitForChild("ShowLobby", 5) :: RemoteEvent?
     if showLobbyEvent then
-        showLobbyEvent.OnClientEvent:Connect(function(_data: any)
+        showLobbyEvent.OnClientEvent:Connect(function(data: any)
             SoundManager.playLobbyMusic()
+            EffectsManager.stopMorassProximityWarning()
+            TutorialUI.onShowLobby(data)
         end)
     end
 
-    -- PlayerEliminated → Play death effect at player position
+    -- PlayerEliminated → Play death effect at player position + stop morass warning
     local eliminatedEvent = eventsFolder:WaitForChild("PlayerEliminated", 5) :: RemoteEvent?
     if eliminatedEvent then
         eliminatedEvent.OnClientEvent:Connect(function(_data: any)
             local position = getPlayerPosition()
             EffectsManager.playDeath(position)
+            EffectsManager.stopMorassProximityWarning()
         end)
     end
 
@@ -121,3 +136,9 @@ end
 --============================================================================
 
 wireEvents()
+
+-- Initialize SettingsUI (gear button always visible)
+SettingsUI.init()
+
+-- Initialize ModeSelectUI (mode selection popup for completed packs)
+ModeSelectUI.init()
